@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'"
+    />
+    <title>Living area</title>
+    <link rel="stylesheet" href="living.css" />
+  </head>
+  <body>
+    <!-- The bounded home range (spec §10.3). A boundary, not a cage. -->
+    <div id="area" class="area">
+      <canvas id="avatar" class="avatar"></canvas>
+    </div>
+    <script src="living.js"></script>
+  </body>
+</html>

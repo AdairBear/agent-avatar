@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'"
+    />
+    <title>Agentic Avatar</title>
+    <link rel="stylesheet" href="popover.css" />
+  </head>
+  <body>
+    <main class="card">
+      <header class="head">
+        <canvas id="avatar" class="avatar" width="120" height="120"></canvas>
+        <div class="head-text">
+          <h1 id="state-name">…</h1>
+          <p id="state-copy" class="muted">Starting up.</p>
+        </div>
+      </header>
+
+      <section class="gauges">
+        <div class="gauge">
+          <div class="gauge-label">
+            <span>Nourishment</span>
+            <span id="nourishment-value" class="value">—</span>
+          </div>
+          <div class="bar"><div id="nourishment-bar" class="fill fill-nourishment"></div></div>
+          <p class="hint">Fed by completed work. Never by tokens spent.</p>
+        </div>
+
+        <div class="gauge">
+          <div class="gauge-label">
+            <span>Stamina</span>
+            <span id="stamina-value" class="value">—</span>
+          </div>
+          <div class="bar"><div id="stamina-bar" class="fill fill-stamina"></div></div>
+          <p id="stamina-hint" class="hint">Drained by usage budget.</p>
+        </div>
+      </section>
+
+      <section class="workstreams">
+        <h2>Workstreams</h2>
+        <ul id="workstream-list"></ul>
+      </section>
+
+      <footer class="foot">
+        <span id="provenance" class="muted mono"></span>
+        <div class="actions">
+          <button id="toggle-living" type="button">Living area</button>
+          <button id="quit" type="button">Quit</button>
+        </div>
+      </footer>
+    </main>
+    <script src="popover.js"></script>
+  </body>
+</html>

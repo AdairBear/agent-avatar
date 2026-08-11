@@ -1,0 +1,34 @@
+/* The living-area window is transparent and click-through; everything here is
+   drawn over the desktop without a surface of its own. */
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: none;
+}
+
+.area {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  /* A faint dashed outline while scaffolding, so the home range is visible.
+     Remove once the roaming behaviour is settled. */
+  border: 1px dashed rgba(140, 140, 140, 0.22);
+  border-radius: 14px;
+}
+
+.avatar {
+  position: absolute;
+  width: 140px;
+  height: 140px;
+  left: 0;
+  top: 0;
+  /* Positioned by transform each frame — cheaper than left/top and it stays
+     off the layout path entirely. */
+  will-change: transform;
+}
