@@ -1,12 +1,12 @@
 /**
- * The living area (spec §10.3) — a free-roaming avatar over a bounded region
- * of the desktop.
+ * The living area — a free-roaming avatar over a bounded region of the desktop.
  *
  * State is expressed in *behaviour and space*, not just a face:
- *   thriving → explores the whole area
- *   drowsy   → slows down, drifts to a corner
- *   asleep   → curls up and stops
- *   stale    → mopes in one spot
+ *   working   → explores the whole area
+ *   idle      → pottters about slowly
+ *   drowsy    → slows down, drifts to a corner
+ *   sleep     → curls up and stops
+ *   unknown   → mopes in one spot
  *   celebrate → a happy dash across the area
  */
 
@@ -49,7 +49,8 @@ async function main(): Promise<void> {
 function apply(next: AvatarSnapshot): void {
   snapshot = next;
   renderer?.setNourishment(next.nourishment / 100);
-  renderer?.setStamina(next.stamina / 100);
+  renderer?.setEnergy(next.energy / 100);
+  renderer?.setWorking(next.isWorking);
   renderer?.setStateName(next.state);
 
   for (const _pulse of pulses.take(next.pulses)) {
@@ -69,16 +70,17 @@ function step(dtMs: number): void {
   // Speed is the behavioural read of state.
   let speed: number;
   switch (state) {
-    case 'thriving':
+    case 'working':
+    case 'celebrate':
       speed = 1;
       break;
-    case 'hungry':
-      speed = 0.75;
+    case 'idle':
+      speed = 0.55;
       break;
     case 'drowsy':
       speed = 0.28;
       break;
-    case 'asleep':
+    case 'sleep':
       speed = 0;
       break;
     case 'unknown':
@@ -88,7 +90,7 @@ function step(dtMs: number): void {
   if (dashMs > 0) speed = Math.max(speed, 2.6);
 
   if (speed === 0) {
-    // Asleep: settle where it is, drifting gently to the floor of the area.
+    // Sleeping: settle where it is, drifting gently to the floor of the area.
     pet.y = Math.min(maxY, pet.y + 0.02 * dtMs);
     place();
     return;

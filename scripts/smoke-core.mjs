@@ -1,183 +1,206 @@
 #!/usr/bin/env node
 /**
- * Headless proof that the core loop works — no GUI, no Electron.
+ * Headless proof that the desktop core works — no GUI, no Electron, no backend.
  *
  * This exists because "the app launched" is not evidence that the gauges move.
- * It drives the real engine against the real fake adapter on a compressed
- * synthetic clock and asserts the behaviours that matter:
+ * It drives the real client and the real mock source and asserts the
+ * behaviours that matter:
  *
- *   1. completions raise Nourishment, and each one emits exactly one celebrate pulse
- *   2. low-confidence completions are REJECTED (spec §7 rule 2)
- *   3. duplicate completion ids cannot double-feed (spec §7 rule 6)
- *   4. usage drains Stamina, and never touches Nourishment (spec §7 rule 1)
- *   5. the state ladder walks thriving → drowsy → asleep
- *   6. stale telemetry forces `unknown`, never a happy creature (spec §5.2)
+ *   1. a real backend payload parses into a snapshot with the right gauges
+ *   2. the four Rive input names survive the round trip
+ *   3. an unreachable backend renders `unknown`, never a healthy creature
+ *   4. a payload older than its own staleness budget is downgraded to `unknown`
+ *   5. malformed JSON and junk payloads degrade instead of throwing
+ *   6. mock mode walks the arc and reaches `sleep`
  *
  * Run:  npm run smoke
  */
 
-import { AvatarEngine } from '../dist/core/engine.mjs';
-import { FakeAdapter } from '../dist/core/fake.mjs';
-
-const CONFIG = {
-  tickMs: 1_000,
-  nourishmentBump: 12,
-  nourishmentHalfLifeDays: 0.0006,
-  hungryBelow: 35,
-  acceptLikelyCompletions: false,
-  drowsyBelow: 20,
-  asleepAtOrBelow: 0,
-  livenessWindowS: 45,
-};
-
-// A synthetic clock: no sleeping, no flakiness, and the whole arc in milliseconds.
-let clock = Date.parse('2026-08-11T12:00:00Z');
-const now = () => clock;
+import { TelemetryClient, normalize } from '../dist/core/client.mjs';
+import { MockSource } from '../dist/core/mock.mjs';
 
 const failures = [];
 const check = (label, condition, detail = '') => {
   if (condition) {
     console.log(`  ✓ ${label}`);
   } else {
-    console.log(`  ✗ ${label}${detail ? ` — ${detail}` : ''}`);
+    console.log(`  ✗ ${label} ${detail}`);
     failures.push(label);
   }
 };
 
-async function main() {
-  const adapter = new FakeAdapter({
-    drainSeconds: 120,
-    completionEverySeconds: 8,
-    now,
-  });
+/** A payload shaped exactly like `avatar_telemetry` publishes. */
+function backendPayload(overrides = {}) {
+  return {
+    schema: 'agentic-avatar.telemetry/1',
+    at: new Date().toISOString(),
+    mode: 'live',
+    fresh: true,
+    stale_after_seconds: 180,
+    state: 'working',
+    state_text: 'Busy — something is moving.',
+    gauges: { nourishment: 42.5, energy: 77.5, health: 66.7 },
+    rive_inputs: { nourishment: 42.5, energy: 77.5, isWorking: true, celebrate: [] },
+    nourishment_detail: {
+      accepted_completions: 4,
+      rejected_completions: 9,
+      accept_confidence: 'certain',
+    },
+    energy_detail: {
+      used_ratio: 0.225,
+      weighted_tokens: 10_125_000,
+      budget_tokens: 45_000_000,
+      window_hours: 5,
+      recovers_at: null,
+    },
+    health_detail: { live_workstreams: 2, known_workstreams: 5, healthy_at: 3 },
+    workstreams: [
+      {
+        id: 'trident-forge',
+        label: 'Trident Forge',
+        live: true,
+        last_meaningful_at: new Date().toISOString(),
+        age_seconds: 12,
+      },
+    ],
+    drooping: ['ebooklm'],
+    pulses: [{ id: 'celebrate:commit:x:abc1234', kind: 'celebrate', at: '', label: 'x' }],
+    recent_completions: [],
+    ...overrides,
+  };
+}
 
-  const engine = new AvatarEngine({
-    adapters: [adapter],
-    config: CONFIG,
+/** A transport that serves a canned body, or nothing at all. */
+const transportOf = (body) => ({
+  fetchState: async () => body,
+  readStateFile: async () => null,
+});
+
+const clientWith = (body, now) =>
+  new TelemetryClient({
+    url: 'http://127.0.0.1:8787/state',
+    stateFile: '/nonexistent/state.json',
+    transport: transportOf(body),
     now,
     log: () => {},
   });
 
-  const seenPulseIds = new Set();
-  let duplicatePulses = 0;
-  const timeline = [];
-
-  engine.onSnapshot((snapshot) => {
-    for (const pulse of snapshot.pulses) {
-      if (seenPulseIds.has(pulse.id)) duplicatePulses += 1;
-      seenPulseIds.add(pulse.id);
-    }
-    timeline.push(snapshot);
-  });
-
-  console.log('\nDriving the engine for 130 synthetic seconds…\n');
-  await engine.start();
-  for (let i = 0; i < 130; i++) {
-    clock += 1_000;
-    await engine.tick();
-  }
-  await engine.stop();
-
-  const states = new Set(timeline.map((s) => s.state));
-  const maxNourishment = Math.max(...timeline.map((s) => s.nourishment));
-  const first = timeline[0];
-  const last = timeline[timeline.length - 1];
-
-  console.log('Assertions:');
-
-  check('nourishment rose above zero from completions', maxNourishment > 0, `max=${maxNourishment}`);
-  check('celebrate pulses were emitted', seenPulseIds.size > 0, `${seenPulseIds.size} pulses`);
-  check('no pulse id was ever emitted twice', duplicatePulses === 0, `${duplicatePulses} dupes`);
-
-  // The fake adapter marks every 4th completion `guessing`, and re-returns an
-  // overlapping window every poll. Accepted count must equal only the confident,
-  // deduped ones.
-  const issued = Math.floor(130 / 8);
-  const expectedAccepted = issued - Math.floor(issued / 4);
+console.log('\n1. A real backend payload parses');
+{
+  const snapshot = normalize(backendPayload());
+  check('nourishment maps through', snapshot.nourishment === 42.5);
+  check('energy maps through', snapshot.energy === 77.5);
+  check('health maps through', snapshot.health === 66.7);
+  check('state maps through', snapshot.state === 'working');
+  check('isWorking maps through', snapshot.isWorking === true);
+  check('mode maps through', snapshot.mode === 'live');
+  check('workstreams map through', snapshot.workstreams[0]?.id === 'trident-forge');
+  check('pulses map through', snapshot.pulses.length === 1);
+  check('drooping maps through', snapshot.drooping[0] === 'ebooklm');
   check(
-    'only confident, deduplicated completions were accepted',
-    last.completionsAccepted === expectedAccepted,
-    `accepted=${last.completionsAccepted} expected=${expectedAccepted} issued=${issued}`,
+    'energy provenance maps through',
+    snapshot.energyDetail.budgetTokens === 45_000_000 && snapshot.energyDetail.windowHours === 5,
   );
   check(
-    'accepted count equals celebrate pulse count (one pulse per accepted completion)',
-    last.completionsAccepted === seenPulseIds.size,
-    `${last.completionsAccepted} vs ${seenPulseIds.size}`,
+    'completion counts map through',
+    snapshot.nourishmentDetail.acceptedCompletions === 4 &&
+      snapshot.nourishmentDetail.rejectedCompletions === 9,
   );
-
-  check('stamina drained to zero', last.stamina === 0, `final=${last.stamina}`);
-  check('stamina started healthy', first.stamina > 90, `initial=${first.stamina}`);
-  check('state reached asleep', states.has('asleep'));
-  check('state passed through drowsy', states.has('drowsy'));
-  check('state was thriving at some point', states.has('thriving'));
-
-  // Spec §7 rule 1: burning budget must be structurally unable to feed the creature.
-  const staminaZero = timeline.filter((s) => s.stamina === 0);
-  check(
-    'nourishment is independent of usage (creature can be asleep AND fed)',
-    staminaZero.some((s) => s.nourishment > 0),
-    'expected at least one asleep-but-nourished snapshot',
-  );
-
-  const droopingSeen = timeline.some((s) => s.drooping.length > 0);
-  check('a stale workstream drooped a limb', droopingSeen);
-  check(
-    'drooping is additive, not a whole-body state',
-    timeline.some((s) => s.drooping.length > 0 && s.state !== 'unknown'),
-  );
-
-  // Freshness invariant: a source that cannot prove freshness must never render healthy.
-  const staleAdapter = {
-    id: 'stale',
-    label: 'deliberately stale source',
-    async usage() {
-      return {
-        type: 'usage',
-        window: 'stale-window',
-        used: 0, // would otherwise read as a FULL tank
-        unit: 'ratio_of_plan',
-        resetsAt: new Date(clock + 3600_000).toISOString(),
-        freshAt: new Date(clock - 3600_000).toISOString(), // an hour old
-        staleAfterS: 30,
-        source: 'stale',
-      };
-    },
-  };
-  const staleEngine = new AvatarEngine({ adapters: [staleAdapter], config: CONFIG, now, log: () => {} });
-  const staleSnapshot = await staleEngine.tick();
-  check(
-    'stale telemetry yields `unknown`, not a full-stamina happy creature',
-    staleSnapshot.state === 'unknown' && staleSnapshot.fresh === false,
-    `state=${staleSnapshot.state} fresh=${staleSnapshot.fresh}`,
-  );
-
-  // And the no-source case, which must behave the same way rather than showing zero.
-  const emptyEngine = new AvatarEngine({ adapters: [], config: CONFIG, now, log: () => {} });
-  const emptySnapshot = await emptyEngine.tick();
-  check(
-    'no usage source at all also yields `unknown` (no fake zeros)',
-    emptySnapshot.state === 'unknown',
-    `state=${emptySnapshot.state}`,
-  );
-
-  console.log('\nSample timeline (every 15s):');
-  console.log('   t   nourish  stamina  state      drooping');
-  for (let i = 0; i < timeline.length; i += 15) {
-    const s = timeline[i];
-    console.log(
-      `  ${String(i).padStart(3)}  ${String(s.nourishment).padStart(6)}  ${String(s.stamina).padStart(7)}  ` +
-        `${s.state.padEnd(9)}  ${s.drooping.join(',') || '—'}`,
-    );
-  }
-
-  if (failures.length > 0) {
-    console.log(`\nFAILED — ${failures.length} assertion(s): ${failures.join('; ')}\n`);
-    process.exit(1);
-  }
-  console.log('\nAll assertions passed.\n');
 }
 
-main().catch((error) => {
-  console.error('smoke test threw:', error);
+console.log('\n2. Gauges stay inside 0–100');
+{
+  const wild = normalize(backendPayload({ gauges: { nourishment: 999, energy: -50, health: 12 } }));
+  check('over-range clamps to 100', wild.nourishment === 100);
+  check('under-range clamps to 0', wild.energy === 0);
+}
+
+console.log('\n3. An unreachable backend is never a healthy creature');
+{
+  const snapshot = await clientWith(null).poll();
+  check('state is unknown', snapshot.state === 'unknown');
+  check('fresh is false', snapshot.fresh === false);
+  check('gauges are not invented', snapshot.nourishment === 0 && snapshot.energy === 0);
+}
+
+console.log('\n4. A stale payload is downgraded, not trusted');
+{
+  const old = backendPayload({ at: new Date(Date.now() - 3_600_000).toISOString() });
+  const snapshot = await clientWith(JSON.stringify(old)).poll();
+  check('an hour-old snapshot reads unknown', snapshot.state === 'unknown');
+  check('and is marked not fresh', snapshot.fresh === false);
+
+  const recent = await clientWith(JSON.stringify(backendPayload())).poll();
+  check('a fresh snapshot is kept', recent.state === 'working' && recent.fresh === true);
+}
+
+console.log('\n5. Junk degrades instead of throwing');
+{
+  check('malformed JSON → unknown', (await clientWith('{not json').poll()).state === 'unknown');
+  check('empty object → unknown', (await clientWith('{}').poll()).state === 'unknown');
+  check('array payload → unknown', (await clientWith('[]').poll()).state === 'unknown');
+  check('null gauges → unknown', normalize({ gauges: null }) === null);
+  const bogusState = normalize(backendPayload({ state: 'ecstatic' }));
+  check('an unrecognised state falls back to unknown', bogusState.state === 'unknown');
+}
+
+console.log('\n6. Late subscribers get the current snapshot');
+{
+  const client = clientWith(JSON.stringify(backendPayload()));
+  await client.poll();
+  let received = null;
+  client.onSnapshot((s) => (received = s));
+  check('subscribing after a poll delivers immediately', received?.state === 'working');
+}
+
+console.log('\n7. Mock mode walks the arc');
+{
+  let clock = Date.parse('2026-08-18T12:00:00Z');
+  const source = new MockSource({ now: () => clock });
+
+  const start = source.snapshot();
+  check('starts with full energy', start.energy === 100);
+  check('starts working', start.state === 'working');
+  check('mode is mock', start.mode === 'mock');
+  check('is always fresh', start.fresh === true);
+
+  clock += 25_000;
+  const celebrating = source.snapshot();
+  check('a completion fires a celebrate pulse', celebrating.pulses.length >= 1);
+  check('and enters celebrate', celebrating.state === 'celebrate');
+
+  clock += 160_000;
+  const drained = source.snapshot();
+  check('energy drains to zero', drained.energy === 0);
+  check('and the creature sleeps', drained.state === 'sleep');
+
+  clock += 600_000;
+  const held = source.snapshot();
+  check('sleep holds rather than wrapping', held.state === 'sleep' && held.energy === 0);
+  check('pulses stay bounded', held.pulses.length <= 8);
+
+  const pinned = new MockSource({ now: () => clock, pinned: { energy: 15, nourishment: 80 } });
+  const posed = pinned.snapshot();
+  check('pinned values hold (the slider path)', posed.energy === 15 && posed.nourishment === 80);
+  check('and resolve to drowsy', posed.state === 'drowsy');
+}
+
+console.log('\n8. Mock snapshots satisfy the same contract as live ones');
+{
+  const source = new MockSource();
+  const snapshot = source.snapshot();
+  for (const key of ['nourishment', 'energy', 'health', 'state', 'isWorking', 'fresh', 'pulses']) {
+    check(`mock snapshot has ${key}`, key in snapshot);
+  }
+  check(
+    'mock gauges are in range',
+    [snapshot.nourishment, snapshot.energy, snapshot.health].every((v) => v >= 0 && v <= 100),
+  );
+}
+
+console.log('');
+if (failures.length > 0) {
+  console.error(`FAILED — ${failures.length} check(s):\n  - ${failures.join('\n  - ')}\n`);
   process.exit(1);
-});
+}
+console.log('All core checks passed.\n');

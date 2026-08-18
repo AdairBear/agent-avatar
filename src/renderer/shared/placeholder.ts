@@ -1,11 +1,11 @@
 /**
- * Phase 1 placeholder avatar — a canvas-2D blob.
+ * Placeholder avatar — a canvas-2D blob.
  *
  * Deliberately crude. Its only job is to prove the signal path end to end: you
- * should be able to watch nourishment and stamina move and see the creature
+ * should be able to watch nourishment and energy move and see the creature
  * respond, before a single frame of Rive art exists.
  *
- * It reads exactly the three signals the `.riv` will read, through exactly the
+ * It reads exactly the four signals the `.riv` will read, through exactly the
  * same interface, so replacing it changes nothing upstream.
  */
 
@@ -16,7 +16,8 @@ export class PlaceholderAvatarRenderer implements AvatarRenderer {
   readonly kind = 'placeholder' as const;
 
   private nourishment = 0.5;
-  private stamina = 1;
+  private energy = 1;
+  private working = false;
   private state: AvatarStateName = 'unknown';
 
   /** Seconds since construction — drives idle bob and blink. */
@@ -30,8 +31,12 @@ export class PlaceholderAvatarRenderer implements AvatarRenderer {
     this.nourishment = clamp01(value01);
   }
 
-  setStamina(value01: number): void {
-    this.stamina = clamp01(value01);
+  setEnergy(value01: number): void {
+    this.energy = clamp01(value01);
+  }
+
+  setWorking(working: boolean): void {
+    this.working = working;
   }
 
   setStateName(state: AvatarStateName): void {
@@ -64,17 +69,18 @@ export class PlaceholderAvatarRenderer implements AvatarRenderer {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);
 
-    const asleep = this.state === 'asleep';
+    const asleep = this.state === 'sleep';
     const unknown = this.state === 'unknown';
 
-    // Plumpness tracks nourishment; saturation and eyelids track stamina.
+    // Plumpness tracks nourishment; saturation and eyelids track energy.
     const plump = 0.72 + this.nourishment * 0.28;
-    const saturation = unknown ? 0 : 28 + this.stamina * 42;
+    const saturation = unknown ? 0 : 28 + this.energy * 42;
     const lightness = unknown ? 62 : 52 + this.nourishment * 10;
     const hue = 24 + this.nourishment * 14; // warm, muted — spec §8 art direction
 
     // Idle bob, plus the celebrate hop.
-    const idleBob = asleep ? 0 : Math.sin(this.t * (1.2 + this.stamina * 1.6)) * 3;
+    const workBoost = this.working ? 1.7 : 1;
+    const idleBob = asleep ? 0 : Math.sin(this.t * (1.2 + this.energy * 1.6) * workBoost) * 3;
     const hopProgress = this.hopMs > 0 ? this.hopMs / 900 : 0;
     const hop = Math.sin(hopProgress * Math.PI) * 26;
 
@@ -140,9 +146,9 @@ export class PlaceholderAvatarRenderer implements AvatarRenderer {
       return;
     }
 
-    // Blink, plus stamina-driven eyelid droop.
+    // Blink, plus energy-driven eyelid droop.
     const blinking = Math.sin(this.t * 0.8) > 0.985;
-    const droop = 1 - this.stamina; // 0 wide awake → 1 heavy lids
+    const droop = 1 - this.energy; // 0 wide awake → 1 heavy lids
     const openness = blinking ? 0.05 : Math.max(0.18, 1 - droop * 0.75);
 
     for (const dx of [-eyeDx, eyeDx]) {

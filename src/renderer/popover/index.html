@@ -31,11 +31,20 @@
 
         <div class="gauge">
           <div class="gauge-label">
-            <span>Stamina</span>
-            <span id="stamina-value" class="value">—</span>
+            <span>Energy</span>
+            <span id="energy-value" class="value">—</span>
           </div>
-          <div class="bar"><div id="stamina-bar" class="fill fill-stamina"></div></div>
-          <p id="stamina-hint" class="hint">Drained by usage budget.</p>
+          <div class="bar"><div id="energy-bar" class="fill fill-energy"></div></div>
+          <p id="energy-hint" class="hint">Remaining usage budget. At zero, it sleeps.</p>
+        </div>
+
+        <div class="gauge">
+          <div class="gauge-label">
+            <span>Health</span>
+            <span id="health-value" class="value">—</span>
+          </div>
+          <div class="bar"><div id="health-bar" class="fill fill-health"></div></div>
+          <p id="health-hint" class="hint">Carousel liveness — how many workstreams are moving.</p>
         </div>
       </section>
 

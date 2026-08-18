@@ -1,145 +1,153 @@
-# How real telemetry plugs in later
+# Telemetry: what it reads, and how to extend it
 
-> **Not built yet — this is the interface, not the integration.** Phase 1 ships
-> one `FakeAdapter`. This document is the contract Track 3 implements against.
+> **This is built.** It reads real session logs on this machine and computes
+> real gauges. What follows is what it looks at, what it deliberately ignores,
+> and where a new data source plugs in.
 
-## The seam
+Everything runs locally. No API keys, no accounts, no outbound requests. The
+HTTP service binds `127.0.0.1` only.
 
-Everything above the adapter layer — gauges, state resolver, tray, popover,
-living area — knows only about three plain data types and nothing about where
-they came from. The whole integration surface is
-`src/core/adapters/types.ts`:
+## What it reads
 
-```ts
-export interface SourceAdapter {
-  readonly id: string;
-  readonly label: string;
+`~/.claude/projects/*/*.jsonl` — append-only session logs already on disk.
 
-  start?(): Promise<void> | void;
-  stop?(): Promise<void> | void;
+The scanner keeps a byte offset per file and only opens files whose mtime falls
+inside the lookback window (default 7 days), so a poll after the first is
+nearly free. A partially-written trailing line is left unconsumed for the next
+poll rather than parsed as corrupt.
 
-  completions?(since: Date): Promise<CompletionEvent[]>;  // → Nourishment
-  usage?(): Promise<UsageMetric | null>;                   // → Stamina
-  workstreams?(): Promise<WorkstreamSignal[]>;             // → liveness
-}
+Three signals come out, in `extract.py`:
+
+| Type | Source records | Feeds |
+|---|---|---|
+| `CompletionEvent` | tool calls that prove work finished | Nourishment |
+| `UsageSample` | `message.usage` on assistant turns | Energy |
+| `ActivitySignal` | human prompts, completions | liveness → Health |
+
+## Completions: what counts as "done"
+
+The rule is that an accepted completion must be tied to an artifact that exists
+whether or not anyone claimed success.
+
+| Detected from | `kind` | Confidence | Counted by default |
+|---|---|---|---|
+| `Bash` running `git commit`, whose result printed `[branch <sha>]` | `commit` | `certain` | **yes** |
+| `TaskUpdate` with `status: "completed"` and a task id | `task_done` | `certain` | **yes** |
+| `Bash` running a test runner, output says passed and not failed | `test_pass` | `likely` | no |
+| `TodoWrite` item with `status: "completed"` | `task_done` | `likely` | no |
+
+Three rules the extractors honour:
+
+1. **The dedup `id` is built from the artifact**, not from a position in the
+   file: `commit:<workstream>:<sha>`, `task:<session>:<taskId>`. Re-reading the
+   same history produces the same ids, so idempotency is free.
+2. **Extractors do not filter by confidence.** They emit what they saw and let
+   `NourishmentGauge` apply the gate, so the policy lives in one place
+   (`AVATAR_ACCEPT_CONFIDENCE`) where it can be reasoned about and changed.
+3. **Proving a Bash command succeeded takes two records** — the assistant's
+   `tool_use` (which has the command) and the later `tool_result` (which has the
+   output). Those can straddle a poll boundary, so `CompletionExtractor` holds
+   pending tool calls across polls, in a bounded map so an unanswered call
+   cannot leak.
+
+The rejected count is published in `nourishment_detail.rejected_completions`.
+That is deliberate: a creature that is permanently hungry should be
+*diagnosable* — you can see it saw 48 candidates and admitted 3 — rather than
+mysterious.
+
+## Usage: the one rule that matters most
+
+```
+weighted = input_tokens
+         + output_tokens
+         + cache_creation_input_tokens
+         + cache_read_input_tokens × 0.1
 ```
 
-Every method is optional. An adapter that only knows about usage implements
-only `usage()`.
+Summed over a rolling `energy_window_hours` (default 5) and divided by
+`energy_budget_tokens` (default 45,000,000).
 
-## The swap, concretely
-
-`src/main/index.ts`, one function:
-
-```ts
-function buildAdapters(): SourceAdapter[] {
-  return [new FakeAdapter({ drainSeconds: 180, completionEverySeconds: 8 })];
-}
-```
-
-becomes
-
-```ts
-function buildAdapters(): SourceAdapter[] {
-  return [new ConductorAdapter(), new TokenTelemetryAdapter()];
-}
-```
-
-and `DEMO_CONFIG` becomes `DEFAULT_CONFIG`. Nothing else in the app changes.
-
-## Adapter 1 — Nourishment, from Conductor / ambassador
-
-**Implements:** `completions()`, `workstreams()`
-
-The ambassador loop already classifies signals as
-`completed | waiting | blocked | …` with `[Certain] | [Likely] | [Guessing]`
-confidence. The adapter's job is pure translation into `CompletionEvent`:
-
-```ts
-{
-  type: 'completion',
-  id: 'pr:trident-forge#412',   // dedup key — stable + verifiable
-  workstream: 'trident-forge',
-  kind: 'pr_merge',
-  confidence: 'certain',
-  at: '2026-08-11T17:04:00Z',
-  source: 'conductor',
-  label: 'Trident Forge — risk engine guard',
-}
-```
-
-Three rules the adapter must honour:
-
-1. **`id` must be tied to a verifiable artifact** — a merged PR SHA, a closed
-   task id — never a self-declared flag. This is what makes fake completions
-   hard (spec §7 rule 2). The engine dedups on it, so idempotency is free.
-2. **Do not filter by confidence in the adapter.** Emit what the ambassador
-   said and let `NourishmentGauge` apply the gate. The policy lives in
-   `config.acceptLikelyCompletions`, in one place, where it can be changed and
-   reasoned about.
-3. **Overlapping windows are expected.** `completions(since)` is called every
-   tick and may legitimately return events it already returned. Dedup upstream
-   handles it — do not build your own cursor bookkeeping.
-
-`workstreams()` maps detected projects to `WorkstreamSignal`, where
-`lastMeaningfulAt` keys off **completions and substantive sessions**, not commit
-count — a flurry of empty commits must not un-droop a limb (spec §7 rule 4).
-
-## Adapter 2 — Stamina, from tokentelemetry
-
-**Implements:** `usage()`
-
-```ts
-{
-  type: 'usage',
-  window: '2026-08-01..2026-08-31',
-  used: 0.63,                            // ratio of plan, 0..1
-  unit: 'ratio_of_plan',
-  costUsd: 41.20,
-  resetsAt: '2026-09-01T00:00:00Z',
-  freshAt: '2026-08-11T19:22:11Z',       // when THIS measurement was taken
-  staleAfterS: 1800,
-  source: 'tokentelemetry',
-}
-```
-
-**The one rule that matters most: return `null`, never a zero.**
-
-If tokentelemetry is unreachable, its output is missing, or the numbers cannot
-be trusted, `usage()` returns `null`. It must not return `used: 0`, because
+**Absence is reported, never invented.** If no usage sample has ever been seen,
+`EnergyGauge.read()` returns `fresh: False` — it does not return a zero, because
 `used: 0` means *a full tank* and would render a bright, healthy creature on the
 strength of no data at all.
 
-That is enforced downstream too — `StaminaGauge.read()` marks any absent or
-past-`staleAfterS` metric as `fresh: false`, and `resolveState()` turns
-`fresh: false` into `unknown` (desaturated, `?`) regardless of the numbers. But
-adapters should not lean on that: **fail loud at the source**.
+That is enforced twice more downstream: `resolve_state()` turns `fresh: False`
+into `unknown` regardless of the numbers, and `src/core/client.ts` independently
+downgrades any payload older than its own `stale_after_seconds`. Three layers,
+because this is the failure mode that hides incidents.
 
-This is the tokentelemetry "no fake zeros" contract and the wrist-ops freshness
-invariant, both already load-bearing elsewhere in the stack.
+## Liveness and Health
 
-## Error handling contract
+A workstream is a project directory, derived from the session `cwd`. Worktrees
+under `<project>/.claude/worktrees/<name>` credit the parent project.
 
-Adapters may throw. The engine isolates each one per-method, logs at `warn`
-with the adapter id, and continues — one bad source degrades that signal
-rather than blinding the whole app. What an adapter must **not** do is swallow
-its own failure and return plausible-looking data; that is the silent-failure
-pattern the fail-loud rule exists to prevent.
+`lastMeaningfulAt` advances on **human prompts and completions only** — not on
+tool chatter. A busy agent loop talking to itself must not keep a limb upright.
 
-## Multi-adapter resolution
+Filters that keep the count honest:
 
-- **Completions:** all adapters are polled and all events pooled; `id` dedups.
-- **Usage:** first adapter returning a non-null metric wins. Order matters, so
-  list the authoritative source first.
-- **Workstreams:** merged by `id`, freshest `lastMeaningfulAt` winning.
+- `min_records_per_workstream` (default 3) — a single stray file read must not
+  manufacture a workstream.
+- `ignore_workstreams` — tooling directories (`scratchpad`, `observer-sessions`,
+  `memory`, …) that would otherwise inflate carousel health.
 
-## What is deliberately not here yet
+## Extending it: add an extractor, not a rewrite
 
-- **Carousel mode** (spec §2.2) — named categories, expected slots, lane
-  semantics. It rides on top of `workstreams()` as *labels and expected counts*,
-  not new mechanics. Nothing in Phase 1 blocks it.
-- **Cursor / OpenCode / Hermes adapters** — each is a new file implementing the
-  same interface.
-- **Persistence.** Nourishment currently resets on app restart. Real use wants
-  the gauge and the dedup set persisted, so a restart doesn't wipe a well-fed
-  creature. Small, and worth doing when the first real adapter lands.
+Everything above `extract.py` knows only about `CompletionEvent`,
+`UsageSample`, and `ActivitySignal`, and nothing about where they came from.
+A new source — Conductor, Cursor, OpenCode, Hermes — is a function that produces
+those types.
+
+To add one:
+
+1. Write the extractor. If it needs to correlate two records, follow the
+   `CompletionExtractor` pattern: hold pending state in a **bounded** map.
+2. Give completions an `id` derived from a verifiable artifact.
+3. Set confidence honestly. `certain` means an artifact exists; `likely` means
+   something said so. When in doubt, `likely` — the gate defaults to excluding
+   it, which fails toward an under-fed creature rather than a lying one.
+4. Return `None` rather than a plausible zero when you cannot measure.
+5. Add tests to `telemetry/tests/test_telemetry.py`.
+
+Throwing is acceptable — the poll loop logs at `exception` and survives. What an
+extractor must **not** do is swallow its own failure and return plausible data;
+that is the silent-failure pattern all of the above exists to prevent.
+
+## Configuration
+
+Every tunable is an environment variable, defined with its default in
+`config.py`:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `AVATAR_PROJECTS_DIR` | `~/.claude/projects` | where logs are read from |
+| `AVATAR_LOOKBACK_DAYS` | `7` | how far back the first poll reads |
+| `AVATAR_STATE_FILE` | `~/.agentic-avatar/state.json` | published state file |
+| `AVATAR_PORT` | `8787` | loopback HTTP port |
+| `AVATAR_POLL_SECONDS` | `20` | poll interval |
+| `AVATAR_BUMP` | `12` | points per accepted completion |
+| `AVATAR_HALF_LIFE_DAYS` | `3` | nourishment decay |
+| `AVATAR_ACCEPT_CONFIDENCE` | `certain` | the gate: `certain` / `likely` / `guessing` |
+| `AVATAR_ENERGY_WINDOW_HOURS` | `5` | rolling budget window |
+| `AVATAR_ENERGY_BUDGET_TOKENS` | `45000000` | weighted tokens = a full tank |
+| `AVATAR_CACHE_READ_WEIGHT` | `0.1` | how much a cached read costs |
+| `AVATAR_DROWSY_BELOW` | `20` | energy threshold for drowsy |
+| `AVATAR_ASLEEP_AT` | `0` | energy threshold for sleep |
+| `AVATAR_LIVENESS_WINDOW_HOURS` | `6` | how long a workstream stays live |
+| `AVATAR_HEALTHY_WORKSTREAMS` | `3` | live count that reads as health 100 |
+| `AVATAR_MIN_RECORDS` | `3` | evidence needed to count as a workstream |
+| `AVATAR_IGNORE_WORKSTREAMS` | tooling dirs | comma-separated denylist |
+| `AVATAR_STALE_AFTER_S` | `180` | how long a published snapshot stays valid |
+
+## Not built yet
+
+- **Persistence.** Nourishment and its dedup set live in memory, so a backend
+  restart re-reads the lookback window but loses the accumulated total. Small,
+  and the obvious next thing.
+- **Carousel mode proper** — named categories and expected slots. It rides on
+  top of liveness as *labels and expected counts*, not new mechanics. Nothing
+  here blocks it.
+- **A published plan limit.** The logs do not record one, so the energy budget
+  is calibrated from observed throughput rather than from an authoritative
+  number. See the README's Limitations.

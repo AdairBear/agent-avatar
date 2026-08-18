@@ -66,16 +66,16 @@ const rendererConfigs = [
 
 /** The pure core, bundled standalone so the headless smoke test can import it. */
 const coreConfig = {
-  entryPoints: [path.join(ROOT, 'src/core/engine.ts')],
-  outfile: path.join(DIST, 'core/engine.mjs'),
+  entryPoints: [path.join(ROOT, 'src/core/client.ts')],
+  outfile: path.join(DIST, 'core/client.mjs'),
   platform: 'neutral',
   format: 'esm',
   target: 'node20',
 };
 
 const smokeEntryConfig = {
-  entryPoints: [path.join(ROOT, 'src/core/adapters/fake.ts')],
-  outfile: path.join(DIST, 'core/fake.mjs'),
+  entryPoints: [path.join(ROOT, 'src/core/mock.ts')],
+  outfile: path.join(DIST, 'core/mock.mjs'),
   platform: 'neutral',
   format: 'esm',
   target: 'node20',

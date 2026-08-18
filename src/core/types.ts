@@ -1,70 +1,33 @@
 /**
- * Wire contracts for the Agentic Avatar engine.
+ * The wire contract between the telemetry backend and the desktop shell.
  *
- * Everything in `src/core` is pure TypeScript over plain data: no Electron, no
- * Node, no DOM. That is deliberate — it is what lets the Electron shell be
- * swapped for Tauri or native Swift later without touching the engine.
- *
- * Event shapes track the spec (§5.1, §5.2) so real adapters can emit them
- * verbatim.
+ * This mirrors the `agentic-avatar.telemetry/1` payload that
+ * `telemetry/avatar_telemetry` publishes. The backend owns all gauge maths --
+ * decay, budget windows, liveness, state precedence -- and this app renders
+ * what it is told. That split is deliberate: two implementations of the same
+ * gauge would drift, and the drift would be invisible.
  */
 
-/** Ambassador-style confidence tiers. Only `certain` feeds Nourishment by default. */
-export type Confidence = 'certain' | 'likely' | 'guessing';
-
-/** A verified unit of finished work. The ONLY thing that feeds Nourishment. */
-export interface CompletionEvent {
-  type: 'completion';
-  /** Dedup key. Stable + verifiable, e.g. `pr:repo#123`, `task:lane-7`. */
-  id: string;
-  /** Workstream this completion belongs to. */
-  workstream: string;
-  kind: 'pr_merge' | 'task_done' | 'lane_done';
-  confidence: Confidence;
-  /** ISO-8601 timestamp. */
-  at: string;
-  /** Adapter id that produced this, for provenance. */
-  source: string;
-  /** Optional human label for the celebrate toast. */
-  label?: string;
-}
-
-/** Usage against the budget window. The ONLY thing that drains Stamina. */
-export interface UsageMetric {
-  type: 'usage';
-  /** Human-readable window, e.g. `2026-08-01..2026-08-31`. */
-  window: string;
-  /** Fraction of the budget consumed, 0..1. */
-  used: number;
-  unit: 'ratio_of_plan';
-  costUsd?: number;
-  /** ISO-8601. When the window resets and stamina refills. */
-  resetsAt: string;
-  /** ISO-8601. When this measurement was taken. */
-  freshAt: string;
-  /** Older than this many seconds and the gauge must not render as healthy. */
-  staleAfterS: number;
-  source: string;
-}
-
-/** An in-flight workstream, auto-detected. Count is data-driven, never hardcoded. */
-export interface WorkstreamSignal {
-  id: string;
-  label: string;
-  /** ISO-8601 of the last *meaningful* signal — not commit count (spec §7 rule 4). */
-  lastMeaningfulAt: string;
-  source: string;
-}
-
-/** Resolved presentation state. Presentation over the gauges, not independent flags. */
+/** Discrete states the `.riv` reacts to. */
 export type AvatarStateName =
-  | 'thriving'
-  | 'hungry'
+  | 'idle'
+  | 'working'
+  | 'celebrate'
   | 'drowsy'
-  | 'asleep'
+  | 'sleep'
   /** Telemetry cannot prove freshness. Desaturated + `?`, never falsely happy. */
   | 'unknown';
 
+export const AVATAR_STATES: readonly AvatarStateName[] = [
+  'idle',
+  'working',
+  'celebrate',
+  'drowsy',
+  'sleep',
+  'unknown',
+];
+
+/** One project's liveness. The count is discovered from data, never hardcoded. */
 export interface WorkstreamLiveness {
   id: string;
   label: string;
@@ -89,28 +52,102 @@ export interface Pulse {
 
 /** The single object the whole UI renders from. */
 export interface AvatarSnapshot {
-  /** ISO-8601 of this snapshot. */
   at: string;
-  /** 0..100. Fed only by verified completions. */
+  /** 'live' when fed by real logs, 'mock' when synthesized. */
+  mode: 'live' | 'mock';
+  /** 0..100. Fed only by completed work. */
   nourishment: number;
-  /** 0..100. Drained only by usage. */
-  stamina: number;
+  /** 0..100. Remaining usage budget. At zero the avatar sleeps. */
+  energy: number;
+  /** 0..100. Carousel liveness: are several workstreams concurrently alive. */
+  health: number;
   state: AvatarStateName;
-  /** Workstream ids that have gone stale — additive, overlaid on the base state. */
-  drooping: string[];
-  workstreams: WorkstreamLiveness[];
+  stateText: string;
+  /** True when a workstream saw signal very recently. Drives the `isWorking` input. */
+  isWorking: boolean;
   /** False when telemetry cannot prove freshness. Forces `state: 'unknown'`. */
   fresh: boolean;
+  /** Workstream ids that have gone quiet — additive, overlaid on the base state. */
+  drooping: string[];
+  workstreams: WorkstreamLiveness[];
   /** One-shots to play. Renderers dedup by `Pulse.id`. */
   pulses: Pulse[];
   /** Provenance for the "why is my creature tired?" tap-through. */
-  usage: {
-    window: string;
-    used: number;
-    costUsd?: number;
-    resetsAt: string;
-    source: string;
-  } | null;
-  /** Rolling count of accepted completions, for the popover copy. */
-  completionsAccepted: number;
+  energyDetail: {
+    usedRatio: number;
+    weightedTokens: number;
+    budgetTokens: number;
+    windowHours: number;
+    recoversAt: string | null;
+  };
+  nourishmentDetail: {
+    acceptedCompletions: number;
+    rejectedCompletions: number;
+    acceptConfidence: string;
+  };
+  healthDetail: {
+    liveWorkstreams: number;
+    knownWorkstreams: number;
+    healthyAt: number;
+  };
+  recentCompletions: Array<{
+    id: string;
+    workstream: string;
+    kind: string;
+    confidence: string;
+    at: string;
+    label: string;
+  }>;
+}
+
+/** One calm line of copy per state. Never guilt, never a streak, never an alarm. */
+export function describeState(state: AvatarStateName): string {
+  switch (state) {
+    case 'idle':
+      return 'Resting between things.';
+    case 'working':
+      return 'Busy — something is moving.';
+    case 'celebrate':
+      return 'Something just landed.';
+    case 'drowsy':
+      return 'Getting tired. Winding down.';
+    case 'sleep':
+      return 'Asleep. Resting until the budget window rolls forward.';
+    case 'unknown':
+      return "Can't read telemetry — not going to guess.";
+  }
+}
+
+/**
+ * A snapshot that admits it knows nothing.
+ *
+ * Used before the first successful poll and whenever the backend is
+ * unreachable. Every gauge reads zero AND `fresh` is false, so no consumer can
+ * mistake "no data" for "healthy".
+ */
+export function unknownSnapshot(mode: 'live' | 'mock' = 'live'): AvatarSnapshot {
+  return {
+    at: new Date().toISOString(),
+    mode,
+    nourishment: 0,
+    energy: 0,
+    health: 0,
+    state: 'unknown',
+    stateText: describeState('unknown'),
+    isWorking: false,
+    fresh: false,
+    drooping: [],
+    workstreams: [],
+    pulses: [],
+    energyDetail: {
+      usedRatio: 0,
+      weightedTokens: 0,
+      budgetTokens: 0,
+      windowHours: 0,
+      recoversAt: null,
+    },
+    nourishmentDetail: { acceptedCompletions: 0, rejectedCompletions: 0, acceptConfidence: '' },
+    healthDetail: { liveWorkstreams: 0, knownWorkstreams: 0, healthyAt: 0 },
+    recentCompletions: [],
+  };
 }

@@ -1,23 +1,24 @@
 /**
  * The menu-bar den (spec §10.3).
  *
- * Phase 1 renders the den as a *title string* rather than an icon:
- * `🦫 N▓▓▓░░ S▓▓▓▓░`. That is a deliberate scaffolding choice — it ships zero
+ * Renders the den as a *title string* rather than an icon:
+ * `🦫 N▓▓▓░░ E▓▓▓▓░`. That is a deliberate scaffolding choice — it ships zero
  * image assets, it is legible at a glance, and it means both gauges are visible
  * without opening anything.
  *
- * Track 1 replaces this with a template PNG (or a small offscreen Rive render)
- * once the art exists; `update()` is the only function that changes.
+ * Replace this with a template PNG (or a small offscreen Rive render) once the
+ * art exists; `update()` is the only function that changes.
  */
 
 import { Menu, Tray, nativeImage } from 'electron';
 import type { AvatarSnapshot, AvatarStateName } from '../core/types.js';
 
 const STATE_GLYPH: Record<AvatarStateName, string> = {
-  thriving: '🦫',
-  hungry: '🦫',
+  idle: '🦫',
+  working: '🦫',
+  celebrate: '🎉',
   drowsy: '🥱',
-  asleep: '💤',
+  sleep: '💤',
   unknown: '❔',
 };
 
@@ -53,14 +54,14 @@ export class AvatarTray {
     }
 
     const n = bar(snapshot.nourishment);
-    const s = bar(snapshot.stamina);
-    this.tray.setTitle(`${glyph} ${n} ${s}`);
+    const e = bar(snapshot.energy);
+    this.tray.setTitle(`${glyph} ${n} ${e}`);
 
     const drooping = snapshot.drooping.length;
     this.tray.setToolTip(
       [
         `Agentic Avatar — ${snapshot.state}`,
-        `Nourishment ${Math.round(snapshot.nourishment)} · Stamina ${Math.round(snapshot.stamina)}`,
+        `Nourishment ${Math.round(snapshot.nourishment)} · Energy ${Math.round(snapshot.energy)} · Health ${Math.round(snapshot.health)}`,
         drooping > 0 ? `${drooping} workstream${drooping === 1 ? '' : 's'} quiet` : '',
       ]
         .filter(Boolean)

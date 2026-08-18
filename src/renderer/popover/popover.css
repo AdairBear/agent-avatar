@@ -6,7 +6,8 @@
   --line: rgba(0, 0, 0, 0.09);
   --track: rgba(0, 0, 0, 0.07);
   --nourish: #d98b3d;
-  --stamina: #4c9a8f;
+  --energy: #4c9a8f;
+  --health: #7a86c4;
   --stale: #9a9a9a;
 }
 
@@ -110,8 +111,12 @@ body {
   background: var(--nourish);
 }
 
-.fill-stamina {
-  background: var(--stamina);
+.fill-energy {
+  background: var(--energy);
+}
+
+.fill-health {
+  background: var(--health);
 }
 
 body.is-stale .fill {
@@ -154,7 +159,7 @@ body.is-stale .fill {
   height: 7px;
   border-radius: 50%;
   flex: 0 0 auto;
-  background: var(--stamina);
+  background: var(--energy);
 }
 
 .dot.stale {

@@ -2,8 +2,8 @@
  * The avatar render slot.
  *
  * The rest of the UI drives the avatar exclusively through `AvatarRenderer`.
- * Behind that interface sits either the real Rive runtime or the Phase 1
- * canvas placeholder — and nothing outside this folder can tell which.
+ * Behind that interface sits either the real Rive runtime or the placeholder
+ * canvas blob -- and nothing outside this folder can tell which.
  *
  * Swapping in the real art is: drop `avatar.riv` into `src/assets/`, rebuild.
  * No code change.
@@ -17,8 +17,10 @@ import { tryCreateRiveRenderer } from './rive.js';
 export interface AvatarRenderer {
   /** @param value01 0..1 — scaled to the artboard's 0–100 at the Rive boundary. */
   setNourishment(value01: number): void;
-  /** @param value01 0..1 */
-  setStamina(value01: number): void;
+  /** @param value01 0..1 — scaled to the artboard's 0–100 at the Rive boundary. */
+  setEnergy(value01: number): void;
+  /** Drives the `isWorking` boolean input. */
+  setWorking(working: boolean): void;
   setStateName(state: AvatarStateName): void;
   /** Fire-and-forget one-shot. Maps to the Rive `celebrate` trigger. */
   celebrate(): void;
@@ -43,8 +45,8 @@ export async function createAvatarRenderer(canvas: HTMLCanvasElement): Promise<A
       console.info('[avatar] rendering via Rive:', RIVE_ASSET_URL);
       return rive;
     }
-    // Asset present but the runtime refused it — that is a real problem worth
-    // shouting about, not something to paper over silently.
+    // Asset present but the runtime refused it — a real problem worth shouting
+    // about, not something to paper over silently.
     console.warn(
       `[avatar] ${RIVE_ASSET_URL} exists but the Rive runtime could not load it. ` +
         'Falling back to the placeholder.',

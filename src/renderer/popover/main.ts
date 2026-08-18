@@ -1,9 +1,8 @@
 /**
- * The popover: click the menu-bar den to see the two gauges and what's in flight.
+ * The popover: click the menu-bar den to see the three gauges and what's in flight.
  */
 
 import type { AvatarSnapshot } from '../../core/types.js';
-import { describeState } from '../../core/state.js';
 import { createAvatarRenderer, type AvatarRenderer } from '../shared/renderer.js';
 import { PulsePlayer } from '../shared/bridge.js';
 
@@ -19,9 +18,12 @@ const ui = {
   stateCopy: el('state-copy'),
   nourishmentValue: el('nourishment-value'),
   nourishmentBar: el('nourishment-bar'),
-  staminaValue: el('stamina-value'),
-  staminaBar: el('stamina-bar'),
-  staminaHint: el('stamina-hint'),
+  energyValue: el('energy-value'),
+  energyBar: el('energy-bar'),
+  energyHint: el('energy-hint'),
+  healthValue: el('health-value'),
+  healthBar: el('health-bar'),
+  healthHint: el('health-hint'),
   workstreamList: el<HTMLUListElement>('workstream-list'),
   provenance: el('provenance'),
   toggleLiving: el<HTMLButtonElement>('toggle-living'),
@@ -54,37 +56,60 @@ function render(snapshot: AvatarSnapshot): void {
   document.body.classList.toggle('is-stale', !snapshot.fresh);
 
   ui.stateName.textContent = snapshot.state;
-  ui.stateCopy.textContent = describeState(snapshot.state);
+  ui.stateCopy.textContent = snapshot.stateText;
 
-  ui.nourishmentValue.textContent = `${Math.round(snapshot.nourishment)}`;
-  ui.nourishmentBar.style.width = `${snapshot.nourishment}%`;
-  ui.staminaValue.textContent = snapshot.fresh ? `${Math.round(snapshot.stamina)}` : '?';
-  ui.staminaBar.style.width = `${snapshot.fresh ? snapshot.stamina : 100}%`;
+  // A stale snapshot shows `?`, never a number it cannot back up.
+  setGauge(ui.nourishmentValue, ui.nourishmentBar, snapshot.nourishment, snapshot.fresh);
+  setGauge(ui.energyValue, ui.energyBar, snapshot.energy, snapshot.fresh);
+  setGauge(ui.healthValue, ui.healthBar, snapshot.health, snapshot.fresh);
 
-  ui.staminaHint.textContent = snapshot.fresh
-    ? staminaHint(snapshot)
+  ui.energyHint.textContent = snapshot.fresh
+    ? energyHint(snapshot)
     : 'Telemetry is stale — not going to show you a number it cannot back up.';
+  ui.healthHint.textContent = snapshot.fresh
+    ? `${snapshot.healthDetail.liveWorkstreams} of ${snapshot.healthDetail.knownWorkstreams} workstreams live`
+    : 'Unknown.';
 
   renderer?.setNourishment(snapshot.nourishment / 100);
-  renderer?.setStamina(snapshot.stamina / 100);
+  renderer?.setEnergy(snapshot.energy / 100);
+  renderer?.setWorking(snapshot.isWorking);
   renderer?.setStateName(snapshot.state);
   for (const _pulse of pulses.take(snapshot.pulses)) renderer?.celebrate();
 
   renderWorkstreams(snapshot);
 
   ui.provenance.textContent = [
-    `${snapshot.completionsAccepted} completions`,
-    snapshot.usage ? `via ${snapshot.usage.source}` : 'no usage source',
+    `${snapshot.nourishmentDetail.acceptedCompletions} completions`,
+    snapshot.mode === 'mock' ? 'MOCK DATA' : 'local logs',
     renderer ? renderer.kind : '',
   ]
     .filter(Boolean)
     .join(' · ');
 }
 
-function staminaHint(snapshot: AvatarSnapshot): string {
-  if (!snapshot.usage) return 'Drained by usage budget.';
-  const cost = snapshot.usage.costUsd != null ? ` · $${snapshot.usage.costUsd.toFixed(2)}` : '';
-  return `${Math.round(snapshot.usage.used * 100)}% of budget used${cost}`;
+function setGauge(
+  valueEl: HTMLElement,
+  barEl: HTMLElement,
+  value: number,
+  fresh: boolean,
+): void {
+  valueEl.textContent = fresh ? `${Math.round(value)}` : '?';
+  barEl.style.width = `${fresh ? value : 100}%`;
+}
+
+function energyHint(snapshot: AvatarSnapshot): string {
+  const { usedRatio, windowHours, recoversAt } = snapshot.energyDetail;
+  const used = `${Math.round(usedRatio * 100)}% of a ${windowHours}h budget used`;
+  if (snapshot.state === 'sleep' && recoversAt) {
+    return `${used} · wakes ${formatClock(recoversAt)}`;
+  }
+  return used;
+}
+
+function formatClock(iso: string): string {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return 'later';
+  return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
 function renderWorkstreams(snapshot: AvatarSnapshot): void {

@@ -6,3 +6,14 @@ dist/
 # Art drops in here from Track 1; the binary shouldn't live in git history
 # until we've decided how to version it.
 src/assets/*.riv
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Published telemetry state (regenerated; also lives outside the repo by default)
+*.json.tmp
+
+# Stray per-directory hook state
+src/**/.claude/

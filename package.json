@@ -9,7 +9,13 @@
     "build": "node scripts/build.mjs",
     "watch": "node scripts/build.mjs --watch",
     "start": "npm run build && electron .",
+    "mock": "npm run build && electron . --mock",
     "dev": "npm run build && electron . --enable-logging",
+    "telemetry": "python3 -m avatar_telemetry",
+    "telemetry:mock": "python3 -m avatar_telemetry --mock",
+    "telemetry:once": "python3 -m avatar_telemetry --once",
+    "test": "npm run smoke && npm run test:telemetry",
+    "test:telemetry": "cd telemetry && python3 -m unittest discover -s tests",
     "smoke": "node scripts/build.mjs && node scripts/smoke-core.mjs",
     "typecheck": "tsc --noEmit",
     "postinstall:electron": "node node_modules/electron/install.js"
