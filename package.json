@@ -14,9 +14,10 @@
     "telemetry": "python3 -m avatar_telemetry",
     "telemetry:mock": "python3 -m avatar_telemetry --mock",
     "telemetry:once": "python3 -m avatar_telemetry --once",
-    "test": "npm run smoke && npm run test:telemetry",
+    "test": "npm run smoke && npm run smoke:rive && npm run test:telemetry",
     "test:telemetry": "cd telemetry && python3 -m unittest discover -s tests",
     "smoke": "node scripts/build.mjs && node scripts/smoke-core.mjs",
+    "smoke:rive": "node scripts/smoke-rive.mjs",
     "typecheck": "tsc --noEmit",
     "postinstall:electron": "node node_modules/electron/install.js"
   },

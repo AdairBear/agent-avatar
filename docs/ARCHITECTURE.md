@@ -120,17 +120,28 @@ Two implementations, chosen at runtime by `createAvatarRenderer()`:
 exists it is used; otherwise the placeholder runs and logs one line saying so.
 Dropping the real `.riv` in and rebuilding is the entire integration step.
 
-### Two Rive gotchas already handled in the scaffold
+### Three Rive gotchas already handled in the scaffold
 
 - **WASM must be local.** `@rive-app/canvas` fetches `rive.wasm` from a CDN by
   default. A desktop app cannot depend on that. `scripts/build.mjs` copies the
   wasm into `dist/renderer/` and the renderer calls `RuntimeLoader.setWasmUrl()`
   at a local path before instantiating.
+- **Autoplay does not instance a state machine.** The runtime's
+  `Animator.atLeastOne()` instances the first *timeline animation* and only
+  falls through to a state machine when the artboard has none — and an artboard
+  authored with a state machine also contains the timelines that machine drives,
+  so the animation branch always wins. `stateMachineInputs()` searches
+  *instanced* machines only, so it returns `undefined` and **all four names fail
+  to bind**. `ensureStateMachineInstanced()` resolves the machine name after load
+  and starts it explicitly, stopping the default timeline first so the two do not
+  fight over the same properties. `scripts/smoke-rive.mjs` locks this: without
+  the fix, an ordinary state-machine artboard binds `0/4`.
 - **Input names are a contract with the artboard.** The four names are declared
   once in `src/core/rive-contract.ts` and imported by the renderer, so the app
   and the art file have a single written source of truth. A name that resolves
   through neither data binding nor a state-machine input is warned about by
-  name — the renderer does **not** silently pretend to be driving the avatar.
+  name, and the bound count (`4/4 inputs`) is shown in the popover's provenance
+  row — the renderer does **not** silently pretend to be driving the avatar.
 
 ---
 

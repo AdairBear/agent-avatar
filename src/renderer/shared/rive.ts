@@ -1,19 +1,23 @@
 /**
  * The real Rive implementation.
  *
- * Three things here exist because of known Rive-on-desktop gotchas:
+ * Four things here exist because of known Rive-on-desktop gotchas:
  *
  *  1. `RuntimeLoader.setWasmUrl()` points at a LOCAL copy of `rive.wasm`.
  *     `@rive-app/canvas` otherwise fetches it from a CDN at runtime, which a
  *     desktop app must never depend on.
- *  2. The 0–100 values are bound through **data binding when the artboard
+ *  2. **A state machine is not instanced just because autoplay is on.** See
+ *     `ensureStateMachineInstanced()` — without this the state-machine
+ *     fallback below binds nothing at all.
+ *  3. The 0–100 values are bound through **data binding when the artboard
  *     exposes a view model**, and through state-machine inputs otherwise.
  *     Both paths use the same four names from `rive-contract.ts`, so the art
  *     can be authored either way without a code change here.
- *  3. Every name that resolves through NEITHER path is logged loudly. A
- *     silently-absent input would mean the app *looks* like it is driving the
- *     avatar while the artboard never moves — exactly the class of silent
- *     failure that must not be possible.
+ *  4. Every name that resolves through NEITHER path is logged loudly, and the
+ *     bound count is surfaced in the popover. A silently-absent input would
+ *     mean the app *looks* like it is driving the avatar while the artboard
+ *     never moves — exactly the class of silent failure that must not be
+ *     possible.
  */
 
 import type { AvatarRenderer } from './renderer.js';
@@ -41,16 +45,28 @@ interface Binding {
 }
 
 /**
+ * How the Rive package is obtained.
+ *
+ * Injectable so the binding contract can be exercised headlessly against a
+ * stub that reproduces the runtime's documented semantics. Production always
+ * uses the default.
+ */
+export type RiveModuleLoader = () => Promise<any>;
+
+/** Dynamic so a missing/optional dependency degrades instead of breaking the bundle. */
+const importRiveModule: RiveModuleLoader = () => import('@rive-app/canvas');
+
+/**
  * @returns a live renderer, or `null` if the Rive package or the file is
  *          unavailable — the caller then falls back to the placeholder.
  */
 export async function tryCreateRiveRenderer(
   canvas: HTMLCanvasElement,
+  loadRiveModule: RiveModuleLoader = importRiveModule,
 ): Promise<AvatarRenderer | null> {
   let riveModule: any;
   try {
-    // Dynamic so a missing/optional dependency degrades instead of breaking the bundle.
-    riveModule = await import('@rive-app/canvas');
+    riveModule = await loadRiveModule();
   } catch (error) {
     console.warn('[avatar] @rive-app/canvas not available:', error);
     return null;
@@ -83,7 +99,8 @@ export async function tryCreateRiveRenderer(
         onLoad: () => {
           try {
             instance.resizeDrawingSurfaceToCanvas?.();
-            settle(new RiveAvatarRenderer(instance));
+            const machine = ensureStateMachineInstanced(instance);
+            settle(new RiveAvatarRenderer(instance, machine));
           } catch (error) {
             console.warn('[avatar] Rive loaded but inputs could not be bound:', error);
             settle(null);
@@ -101,18 +118,61 @@ export async function tryCreateRiveRenderer(
   });
 }
 
+/**
+ * Make sure a state machine is actually *running*, not merely present.
+ *
+ * This is the gotcha that would otherwise make the state-machine fallback a
+ * lie. `@rive-app/canvas`'s autoplay-with-no-names path (`Animator.atLeastOne`)
+ * reads:
+ *
+ *     if (artboard.animationCount() > 0)        → instance the first ANIMATION
+ *     else if (artboard.stateMachineCount() > 0) → instance the first state machine
+ *
+ * An artboard authored with a state machine also contains the timelines that
+ * machine drives, so `animationCount()` is > 0 and the **animation branch
+ * always wins**. Nothing instances the state machine. `stateMachineInputs()`
+ * then returns `undefined` (it searches *instanced* machines only), so all four
+ * names fail to bind and the avatar renders a frozen pose forever.
+ *
+ * We cannot pass the name up front — it is not knowable until the file loads —
+ * so resolve it here and start it explicitly. The default timeline is stopped
+ * first: an animation and a state machine driving the same artboard fight over
+ * the same properties.
+ *
+ * @param instance A loaded `Rive` instance.
+ * @returns The state machine name now driving the artboard, or `null` when the
+ *          artboard has none (a pure data-binding file, which is fine).
+ */
+function ensureStateMachineInstanced(instance: any): string | null {
+  const available: string[] = instance.stateMachineNames ?? [];
+  const target = RIVE_STATE_MACHINE ?? available[0] ?? null;
+  if (!target) return null;
+
+  // `undefined` means "not instanced"; an instanced machine with no inputs
+  // still returns an array.
+  if (instance.stateMachineInputs?.(target) !== undefined) return target;
+
+  try {
+    instance.stop?.();
+  } catch (error) {
+    console.warn('[avatar] could not stop the default timeline — continuing:', error);
+  }
+  instance.play?.(target);
+  return target;
+}
+
 class RiveAvatarRenderer implements AvatarRenderer {
   readonly kind = 'rive' as const;
+  /** e.g. `4/4 inputs` — surfaced in the popover so a dead contract is visible. */
+  readonly detail: string;
 
   private readonly nourishment: Binding | null;
   private readonly energy: Binding | null;
   private readonly working: Binding | null;
   private readonly celebrateTrigger: Binding | null;
 
-  constructor(private readonly instance: any) {
+  constructor(private readonly instance: any, machine: string | null) {
     const viewModel = instance.viewModelInstance ?? null;
-    const machine =
-      RIVE_STATE_MACHINE ?? instance.stateMachineNames?.[0] ?? undefined;
     const inputs: RiveStateMachineInput[] = machine
       ? (instance.stateMachineInputs?.(machine) ?? [])
       : [];
@@ -123,18 +183,38 @@ class RiveAvatarRenderer implements AvatarRenderer {
     this.working = bindBoolean(viewModel, byName, RIVE_INPUTS.isWorking);
     this.celebrateTrigger = bindTrigger(viewModel, byName, RIVE_INPUTS.celebrate);
 
-    for (const [name, binding] of [
+    const bindings = [
       [RIVE_INPUTS.nourishment, this.nourishment],
       [RIVE_INPUTS.energy, this.energy],
       [RIVE_INPUTS.isWorking, this.working],
       [RIVE_INPUTS.celebrate, this.celebrateTrigger],
-    ] as const) {
+    ] as const;
+
+    for (const [name, binding] of bindings) {
       if (!binding) {
         console.warn(
           `[avatar] Rive artboard exposes no data-binding property and no state-machine ` +
-            `input named "${name}" — that signal is NOT driving the avatar.`,
+            `input named "${name}" — that signal is NOT driving the avatar. ` +
+            `Searched view model: ${viewModel ? 'yes' : 'none'}; ` +
+            `state machine: ${machine ?? 'none'} ` +
+            `(inputs: ${inputs.map((i) => i.name).join(', ') || 'none'}).`,
         );
       }
+    }
+
+    const bound = bindings.filter(([, binding]) => binding).length;
+    this.detail = `${bound}/${bindings.length} inputs`;
+
+    if (bound === 0) {
+      // Louder than a warning: the file loaded and will draw, but the contract
+      // in rive-contract.ts is not implemented, so the avatar is decoration.
+      // Kept rather than swapped for the placeholder, because hiding the art
+      // Thomas just exported would obscure the actual problem.
+      console.error(
+        `[avatar] ${RIVE_ASSET_URL} loaded but NONE of the four contract inputs bound. ` +
+          'The avatar will render a static pose and ignore all telemetry. ' +
+          'See RIVE_BUILD_BRIEF.md — the names are case-sensitive.',
+      );
     }
   }
 

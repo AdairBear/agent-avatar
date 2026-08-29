@@ -142,6 +142,10 @@ JSON, or a payload older than its own staleness budget all resolve to `unknown`
 
 ## Dropping in the `.riv`
 
+**Building the file itself: see [`RIVE_BUILD_BRIEF.md`](RIVE_BUILD_BRIEF.md)** —
+the art-prep steps, the behaviour map, the prompts for Rive's AI Agent, and the
+export settings, as a ~30-minute recipe.
+
 Put the export at **`src/assets/avatar.riv`** and run `npm run build`. That is
 the whole procedure — asset presence, not a config flag, is what switches the
 renderer over. A `.riv` that exists but fails to load is logged loudly rather
@@ -163,8 +167,12 @@ via `autoBind`), and falls back to a state-machine input of the same name. Both
 authoring styles work; you do not have to pick to match the code.
 
 A name that resolves through **neither** path is logged as a warning naming the
-input. That is deliberate — a silently-missing input would leave the app looking
-like it is driving the avatar while the artboard never moves.
+input, and the popover's provenance row reports how many bound — `rive 4/4
+inputs` when the contract is met, `rive 2/4 inputs` when it is half-wired. That
+is deliberate — a silently-missing input would leave the app looking like it is
+driving the avatar while the artboard never moves. `npm run smoke:rive` proves
+the binding layer headlessly, including the case where the artboard exposes the
+four names through a state machine rather than a view model.
 
 Discrete states (`idle` / `working` / `celebrate` / `drowsy` / `sleep`) are
 intentionally *not* separate inputs: they are derivable inside the artboard from

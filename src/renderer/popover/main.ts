@@ -81,7 +81,7 @@ function render(snapshot: AvatarSnapshot): void {
   ui.provenance.textContent = [
     `${snapshot.nourishmentDetail.acceptedCompletions} completions`,
     snapshot.mode === 'mock' ? 'MOCK DATA' : 'local logs',
-    renderer ? renderer.kind : '',
+    renderer ? [renderer.kind, renderer.detail].filter(Boolean).join(' ') : '',
   ]
     .filter(Boolean)
     .join(' · ');

@@ -81,6 +81,21 @@ const smokeEntryConfig = {
   target: 'node20',
 };
 
+/**
+ * The Rive binding layer, bundled standalone so `scripts/smoke-rive.mjs` can
+ * drive it headlessly against a stub runtime. `@rive-app/canvas` stays external
+ * because that test injects its own module — the real package is never loaded
+ * outside a browser.
+ */
+const riveBindingConfig = {
+  entryPoints: [path.join(ROOT, 'src/renderer/shared/rive.ts')],
+  outfile: path.join(DIST, 'renderer/shared/rive.mjs'),
+  platform: 'neutral',
+  format: 'esm',
+  target: 'node20',
+  external: ['@rive-app/canvas'],
+};
+
 const common = {
   bundle: true,
   sourcemap: true,
@@ -140,7 +155,13 @@ async function build() {
   await rm(DIST, { recursive: true, force: true });
   await mkdir(DIST, { recursive: true });
 
-  const configs = [...mainConfigs, ...rendererConfigs, coreConfig, smokeEntryConfig].map((c) => ({
+  const configs = [
+    ...mainConfigs,
+    ...rendererConfigs,
+    coreConfig,
+    smokeEntryConfig,
+    riveBindingConfig,
+  ].map((c) => ({
     ...common,
     ...c,
   }));

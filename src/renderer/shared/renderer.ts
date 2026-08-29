@@ -29,6 +29,14 @@ export interface AvatarRenderer {
   destroy(): void;
   /** Which implementation is live — surfaced in the popover so it's never a mystery. */
   readonly kind: 'rive' | 'placeholder';
+  /**
+   * Optional one-liner about *how well* it is wired, shown next to `kind`.
+   *
+   * The Rive implementation reports how many of the four contract inputs it
+   * actually bound. "rive" alone would look like success even when the
+   * artboard is ignoring every signal.
+   */
+  readonly detail?: string;
 }
 
 /**
