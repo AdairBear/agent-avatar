@@ -5,6 +5,7 @@
 import type { AvatarSnapshot } from '../../core/types.js';
 import { createAvatarRenderer, type AvatarRenderer } from '../shared/renderer.js';
 import { PulsePlayer } from '../shared/bridge.js';
+import { driveRenderer } from '../shared/drive.js';
 
 const el = <T extends HTMLElement>(id: string): T => {
   const node = document.getElementById(id);
@@ -70,11 +71,7 @@ function render(snapshot: AvatarSnapshot): void {
     ? `${snapshot.healthDetail.liveWorkstreams} of ${snapshot.healthDetail.knownWorkstreams} workstreams live`
     : 'Unknown.';
 
-  renderer?.setNourishment(snapshot.nourishment / 100);
-  renderer?.setEnergy(snapshot.energy / 100);
-  renderer?.setWorking(snapshot.isWorking);
-  renderer?.setStateName(snapshot.state);
-  for (const _pulse of pulses.take(snapshot.pulses)) renderer?.celebrate();
+  if (renderer) driveRenderer(renderer, snapshot, pulses);
 
   renderWorkstreams(snapshot);
 

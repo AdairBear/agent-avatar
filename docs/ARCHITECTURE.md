@@ -143,6 +143,45 @@ Dropping the real `.riv` in and rebuilding is the entire integration step.
   name, and the bound count (`4/4 inputs`) is shown in the popover's provenance
   row — the renderer does **not** silently pretend to be driving the avatar.
 
+### 2b. The three.js render layer (3D)
+
+With no `.riv` present, `createAvatarRenderer()` returns a
+`ThreeAvatarRenderer` (`src/renderer/shared/three/`), a third implementation
+of the same interface. Each frame runs one pipeline:
+
+```
+setters (4 signals + state name)
+   │  stored, read once per frame
+   ▼
+PoseMachine.update()          src/core/pose.ts — pure, clock-injected
+   │  sleep > droop > celebrate > working > idle, with hysteresis + dwell
+   ▼
+poseTargets(pose, n, e, stale)  → PoseParams (plain numbers)
+   ▼
+easeParams(current, target, dt)  exponential, frame-rate independent
+   ▼
+AvatarModel3D.update(params)  PrimitiveCapybara (joints) | GltfCapybara (clips)
+   ▼
+WebGLRenderer.render()        transparent canvas, injectable for headless tests
+```
+
+- **Poses are derived in the renderer, as the artboard would.** The `.riv`
+  contract leaves discrete states to the art; with no artboard, `pose.ts`
+  plays that role. Its thresholds match the backend's defaults, and the
+  backend's `sleep` / `drowsy` / `unknown` verdicts win when present, so the
+  backend stays the single source of the tuning.
+- **Model selection is by asset presence**, like the `.riv`:
+  `src/assets/avatar.glb` → `GltfCapybara`, which crossfades one clip per pose
+  named in `src/core/model-contract.ts`. Otherwise it uses `PrimitiveCapybara`.
+- **`src/renderer/shared/drive.ts`** is the single snapshot → renderer path
+  for both windows. It also enforces `fresh: false` ⇒ `unknown`, whatever the
+  payload's `state` field says.
+- **`scripts/smoke-three.mjs`** runs the whole pipeline headlessly with a stub
+  GL backend: the pose ladder, hysteresis, staleness, rig joint movement, the
+  glTF clip crossfade, the mock arc, real payloads, and the real Python backend
+  polled over loopback HTTP while its `/mock` sliders walk the poses.
+- CSP gains `img-src blob:`, which `GLTFLoader` needs for embedded textures.
+
 ---
 
 ## 3. Data → state → avatar
@@ -275,8 +314,10 @@ src/
     living/              index.html + main.ts + living.css
   assets/                drop avatar.riv here
 scripts/
-  build.mjs              esbuild bundling + asset/wasm copy
+  build.mjs              esbuild bundling + asset/wasm/glb copy
   smoke-core.mjs         headless proof the client + mock work (no GUI)
+  smoke-rive.mjs         headless proof the Rive binding layer works
+  smoke-three.mjs        headless proof the 3D layer follows live telemetry
 docs/
   ARCHITECTURE.md        this file
   TELEMETRY.md           what the backend reads and how to extend it

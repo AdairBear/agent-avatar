@@ -11,9 +11,10 @@ A living companion that makes agentic work legible: **two gauges, one creature.*
 Everything is local. No API keys, no accounts, no network egress: the backend
 reads session logs already on this Mac and serves them on loopback only.
 
-> **Status: scaffold, non-animation parts.** The telemetry is real and reads
-> your actual logs. The avatar is a placeholder blob until a `.riv` is dropped
-> in. Both halves are designed to be swapped without touching the other.
+> **Status: telemetry real, 3D render layer real, art placeholder.** The
+> telemetry reads your actual logs. The avatar is a three.js capybara built from
+> primitives, posed live by the four signals, until a rigged `avatar.glb` is
+> dropped in. Both halves are designed to be swapped without touching the other.
 
 ---
 
@@ -52,8 +53,9 @@ every 20s and one workstream deliberately quiet so a limb droops.
 ### Other commands
 
 ```bash
-npm test                # both suites: 47 core checks + 64 telemetry tests
+npm test                # everything: core + Rive + 3D smoke checks, 64 telemetry tests
 npm run smoke           # headless proof the desktop core works — no GUI needed
+npm run smoke:three     # headless proof the 3D layer follows live telemetry
 npm run test:telemetry  # the Python suite alone
 npm run typecheck
 npm run watch           # rebuild on change (then re-run `npx electron .`)
@@ -140,6 +142,78 @@ JSON, or a payload older than its own staleness budget all resolve to `unknown`
 
 ---
 
+## The 3D avatar
+
+With no `.riv` in `src/assets/`, both windows render a **three.js viewport**:
+a transparent WebGL canvas holding a capybara built from primitives (capsule
+barrel, boxy head, stubby legs, hinged ears). It is a placeholder for a rigged
+model, but it is posed entirely by the same code that will drive the real one.
+
+### Four signals → five poses
+
+`src/core/pose.ts` is the 3D layer's state machine. It is pure (no three.js,
+no DOM, clock injected) and resolves the four telemetry signals into one of
+five poses, on the backend's own precedence ladder:
+
+`sleep` > `droop` > `celebrate` > `working` > `idle`
+
+| Pose | When | What the capybara does |
+|---|---|---|
+| `sleep` | energy ≤ 0, or the backend says `sleep` | legs tucked, flat on the floor, eyes shut, rolled a little onto its side, slow deep breathing |
+| `droop` | energy < 20, the backend says `drowsy`, **or telemetry is stale** | body sinks, head hangs, ears flop, heavy lids |
+| `celebrate` | a new `celebrate` pulse (one per accepted completion), held 6s | hops, chin up, happy sway |
+| `working` | `isWorking` | nose down, ears perked, quick bob |
+| `idle` | otherwise | slow bob, occasional blink |
+
+Along with the pose, the signals keep shaping the capybara: **nourishment**
+makes it rounder, and low **energy** slows it, dims its colour and makes its
+eyelids heavy, even while it is working.
+
+The details that stop it misbehaving:
+
+- **Stale reads as droop, desaturated to grey.** It is never a happy pose and
+  never `sleep`, because sleep is a claim about energy that an unreadable feed
+  cannot back up. A snapshot with `fresh: false` is treated as `unknown` no
+  matter what its `state` field says.
+- **Hysteresis.** Energy has to climb 3 points past a threshold before the
+  pose leaves `droop` or `sleep`, so a reading hovering at 20 does not flip the
+  body every poll. `working` ↔ `idle` also waits a 1.5s dwell.
+- **The backend's thresholds win.** The local thresholds match the backend's
+  defaults. When the backend's state says `sleep` or `drowsy`, that verdict is
+  honoured, so retuning `AVATAR_DROWSY_BELOW` takes effect here with no second
+  config.
+- **A celebration during sleep or droop is swallowed**, not queued. A sleeping
+  creature doesn't leap up, and it won't replay the hop later on waking.
+
+Poses resolve to plain numbers (`PoseParams`: crouch, head pitch, ear droop,
+eye openness, bob, hop, sway, curl, plumpness, saturation, tempo). The rig
+eases toward those numbers at a fixed rate whatever the frame rate, so
+transitions blend instead of snapping.
+
+### Dropping in a rigged model
+
+**Put an `avatar.glb` at `src/assets/avatar.glb` and run `npm run build`.**
+As with the `.riv`, the file being there is what switches the renderer. The
+model must ship one looping animation clip per pose, named as declared in
+`src/core/model-contract.ts`:
+
+`idle` · `working` · `droop` · `sleep` · `celebrate` (case-insensitive)
+
+The renderer crossfades between clips on each pose change (0.35s), sets
+playback speed from energy, sizes the model by nourishment and greys it when
+telemetry is stale. A missing clip is warned about by name and falls back to
+`idle`, and the popover's provenance row shows e.g. `three glb 3/5 clips`. A
+`.glb` that fails to load is logged as an error and the primitive capybara is
+used instead.
+
+Producing the model (image-to-3D, rigging, authoring clips in Blender) is a
+manual asset step and is deliberately not part of this repo.
+
+### Renderer selection
+
+`avatar.riv` present → Rive · otherwise → three.js (`avatar.glb` if present,
+else the primitive capybara) · no WebGL → the 2D canvas blob.
+
 ## Dropping in the `.riv`
 
 **Building the file itself: see [`RIVE_BUILD_BRIEF.md`](RIVE_BUILD_BRIEF.md)** —
@@ -222,9 +296,13 @@ src/core/                     pure TypeScript — no Electron, Node, or DOM
   client.ts                     polls the backend, enforces freshness
   mock.ts                       synthetic snapshots, no backend needed
   rive-contract.ts              the four input names
+  pose.ts                       four signals → five poses → rig params (3D)
+  model-contract.ts             the five clip names a rigged avatar.glb ships
 
 src/main/                     Electron shell — tray + windows, ~300 lines
-src/renderer/                 one AvatarRenderer interface, two implementations
+src/renderer/                 one AvatarRenderer interface, three implementations
+  shared/drive.ts               snapshot → renderer, shared by both windows
+  shared/three/                 three.js viewport, primitive capybara, glTF adapter
 ```
 
 **The backend owns all gauge maths; the app renders what it is told.** Two
@@ -291,28 +369,35 @@ Tunables are environment variables, listed with their defaults in
 
 Known and deliberate, in rough order of how likely they are to bite:
 
-1. **The avatar art is a placeholder.** A canvas blob whose plumpness tracks
+1. **The 3D avatar is a primitive placeholder.** A capybara made of capsules
+   and boxes, posed by the real pose layer. The rigged model is a manual asset
+   step; the glTF adapter that will drive it is tested only against synthetic
+   clips, since no real `avatar.glb` exists yet. The three.js build adds ~1MB
+   to each renderer bundle, which is fine for a local file. The per-workstream
+   `drooping[]` overlay (a limb for each quiet project) is not yet in the 3D
+   rig, and the 2D fallback below only runs without WebGL.
+2. **The 2D fallback art is a placeholder.** A canvas blob whose plumpness tracks
    nourishment and whose eyelids track energy. It exists to prove the signal
    path, not to be looked at.
-2. **The energy budget is calibrated, not authoritative.** 45M weighted tokens
+3. **The energy budget is calibrated, not authoritative.** 45M weighted tokens
    per 5h is derived from observed local throughput, not from a published plan
    limit — the logs do not record one. If Claude's actual limit is what you want
    to track, this number needs setting by hand.
-3. **The first live poll is slow.** Reading 7 days of history takes ~20–30s on
+4. **The first live poll is slow.** Reading 7 days of history takes ~20–30s on
    this iMac; every poll after that is near-instant. Lower `--lookback-days` if
    the cold start annoys you.
-4. **Nourishment resets when the backend restarts.** The gauge and its dedup set
+5. **Nourishment resets when the backend restarts.** The gauge and its dedup set
    live in memory. A restart re-reads the lookback window, so recent work comes
    back, but the accumulated total does not survive. Persisting it is small and
    worth doing next.
-5. **Completion detection is heuristic at the edges.** Commits and completed
+6. **Completion detection is heuristic at the edges.** Commits and completed
    tasks are solid. Test-pass detection is regex over stdout and is deliberately
    `likely`, so it does not count by default.
-6. **Workstream identity is the directory name.** Two projects with the same
+7. **Workstream identity is the directory name.** Two projects with the same
    basename in different parents would merge. Not a problem in this repo layout.
-7. **Nothing is packaged.** No `.app` bundle, no login item, no launchd plist.
+8. **Nothing is packaged.** No `.app` bundle, no login item, no launchd plist.
    It runs from the terminal, and the backend must be started separately.
-8. **The Rive data-binding path is written against the runtime's documented API
+9. **The Rive data-binding path is written against the runtime's documented API
    but has not been exercised against a real `.riv`** — there isn't one yet. If
    the first artboard binds through the fallback (state-machine inputs) instead,
    that is the expected behaviour, and the console says which path it took.

@@ -96,6 +96,29 @@ const riveBindingConfig = {
   external: ['@rive-app/canvas'],
 };
 
+/** The pose machine, standalone for `scripts/smoke-three.mjs`. */
+const poseConfig = {
+  entryPoints: [path.join(ROOT, 'src/core/pose.ts')],
+  outfile: path.join(DIST, 'core/pose.mjs'),
+  platform: 'neutral',
+  format: 'esm',
+  target: 'node20',
+};
+
+/**
+ * The 3D render layer, bundled standalone so `scripts/smoke-three.mjs` can run
+ * the whole pipeline — scene graph, pose machine, rig — against a stub GL
+ * backend. `three` stays external so the test shares its instance.
+ */
+const threeLayerConfig = {
+  entryPoints: [path.join(ROOT, 'src/renderer/shared/three/index.ts')],
+  outfile: path.join(DIST, 'renderer/shared/three.mjs'),
+  platform: 'neutral',
+  format: 'esm',
+  target: 'node20',
+  external: ['three', 'three/*'],
+};
+
 const common = {
   bundle: true,
   sourcemap: true,
@@ -117,7 +140,19 @@ async function copyStaticAssets() {
     }
     console.log('[build] avatar.riv found → Rive renderer will be used');
   } else {
-    console.log('[build] no src/assets/avatar.riv → placeholder renderer will be used');
+    console.log('[build] no src/assets/avatar.riv → 3D renderer will be used');
+  }
+
+  // The rigged model, if the manual asset step has produced one. Same rule as
+  // the .riv: its presence swaps the primitive capybara for it.
+  const glb = path.join(ROOT, 'src/assets/avatar.glb');
+  if (await exists(glb)) {
+    for (const dir of ['popover', 'living']) {
+      await cp(glb, path.join(DIST, 'renderer', dir, 'avatar.glb'));
+    }
+    console.log('[build] avatar.glb found → 3D renderer will drive it');
+  } else {
+    console.log('[build] no src/assets/avatar.glb → primitive capybara will be used');
   }
 
   // Rive's WASM must be served locally; the package fetches it from a CDN by
@@ -161,6 +196,8 @@ async function build() {
     coreConfig,
     smokeEntryConfig,
     riveBindingConfig,
+    poseConfig,
+    threeLayerConfig,
   ].map((c) => ({
     ...common,
     ...c,

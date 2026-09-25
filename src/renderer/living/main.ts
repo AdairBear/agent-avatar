@@ -13,6 +13,7 @@
 import type { AvatarSnapshot } from '../../core/types.js';
 import { createAvatarRenderer, type AvatarRenderer } from '../shared/renderer.js';
 import { PulsePlayer } from '../shared/bridge.js';
+import { driveRenderer } from '../shared/drive.js';
 
 const AVATAR_PX = 140;
 
@@ -48,15 +49,9 @@ async function main(): Promise<void> {
 
 function apply(next: AvatarSnapshot): void {
   snapshot = next;
-  renderer?.setNourishment(next.nourishment / 100);
-  renderer?.setEnergy(next.energy / 100);
-  renderer?.setWorking(next.isWorking);
-  renderer?.setStateName(next.state);
-
-  for (const _pulse of pulses.take(next.pulses)) {
-    renderer?.celebrate();
-    dashMs = 1400; // spatialize it too: a happy dash across the living area
-  }
+  if (!renderer) return;
+  // Spatialize a celebration too: a happy dash across the living area.
+  if (driveRenderer(renderer, next, pulses) > 0) dashMs = 1400;
 }
 
 function step(dtMs: number): void {
@@ -122,7 +117,9 @@ function step(dtMs: number): void {
 }
 
 function place(): void {
-  canvas.style.transform = `translate(${pet.x.toFixed(1)}px, ${pet.y.toFixed(1)}px)`;
+  // Face the direction of travel; the avatar is drawn facing right.
+  const facing = pet.vx < 0 ? -1 : 1;
+  canvas.style.transform = `translate(${pet.x.toFixed(1)}px, ${pet.y.toFixed(1)}px) scaleX(${facing})`;
 }
 
 const clampAbs = (v: number, max: number): number => Math.min(max, Math.max(-max, v));
