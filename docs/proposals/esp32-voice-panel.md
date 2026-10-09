@@ -1,6 +1,7 @@
 # Proposal: ESP32 touch screen as voice input and physical face for Agentic Avatar
 
-> **Status:** proposal, written 2026-10-09. Phases 1 and 2 are being built in `voice_bridge/`.
+> **Status:** Phases 1 and 2 are built in `voice_bridge/` and `device/`. Section 6 records
+> the decisions for what comes next. Written 2026-10-09.
 > **Device:** Waveshare ESP32-S3-Touch-AMOLED-2.16 on `/dev/cu.usbmodem114201`.
 > **Primary goal:** speak to Claude for work instead of typing.
 > **Secondary goal:** a Claude task panel that is the same creature as Agentic Avatar.
@@ -346,15 +347,176 @@ A battery on the MX1.25 connector makes the voice button portable around the roo
 
 ---
 
+## 6. Decisions (2026-10-09)
+
+Made by Thomas after Phases 1 and 2. Where a decision changes something
+earlier in this document, this section wins.
+
+### Where things stand
+
+- The board runs xiaozhi v2.5.0 built in English, installed over the air by
+  the bridge. The factory flash is backed up in `~/Backups/`.
+- Dictation and Ask work through `voice_bridge/`. The speech threshold is
+  measured from the room, not fixed.
+- Still to do on the device: the wake word (below), and a firmware fork for
+  the pages.
+
+### Screen pages, in order
+
+1. **Home: the Avatar, with voice built in.** The creature, with nourishment
+   and energy as two arcs at the edge and one calm status line. Voice is an
+   overlay here (listening ring, Dictate or Ask chip, transcript, reply), not a
+   page. Voice never changes the telemetry pose: a sleeping creature stays
+   asleep. Tapping the energy arc opens the usage detail; tapping the
+   nourishment arc opens recent wins.
+2. **Cubase.** A must. See below.
+3. **Work.** The project list. See below.
+4. **Audio.** Spectrograph and mic level.
+5. **Device.** Wi-Fi, bridge link, brightness, default voice mode, wake word.
+
+The BOOT button is voice on every page.
+
+### Wake word: "Agent"
+
+Thomas wants "Agent". What the firmware can do:
+
+| Route | Feasible | Notes |
+|---|---|---|
+| WakeNet model for "Agent" | no | WakeNet models are trained per phrase and ship as a fixed list. There is no "Agent". A new one means Espressif's custom-training service. |
+| MultiNet custom phrase, bare "Agent" | yes, not advised | xiaozhi's custom wake word mode runs the English MultiNet model (`mn7_en` or `mn6_en`) against a phrase given as text. One common two-syllable word will fire on ordinary speech, and in this house "agent" is said all day. In dictation mode a false wake pastes into the focused app. |
+| MultiNet custom phrase, "Hey Agent" | yes, **proposed** | Same mechanism, three syllables with a lead-in, so far fewer accidental wakes. Needs `CONFIG_USE_CUSTOM_WAKE_WORD`, an English MultiNet model, and an assets flash over USB (the model lives in the assets partition). Untested on this board. |
+| WakeNet "Computer" or "Jarvis" | yes, fallback | Trained wake models, the most robust option. "Jarvis" is what the current build is configured for. |
+
+Plan: build "Hey Agent", flash the assets, and count false wakes from the
+bridge log for a day. If it misfires, lower the sensitivity
+(`CONFIG_CUSTOM_WAKE_WORD_THRESHOLD`), and if that is not enough fall back to
+"Computer". Nothing is flashed until Thomas confirms the phrase.
+
+### Needs-attention: yes
+
+A session waiting on Thomas shows on the creature. Rules:
+
+- **Notify only.** The board never approves, denies or answers anything.
+- **A calm gesture, per the art brief.** The creature looks up and perks its
+  ears, at most about once a minute, and the status line names the project:
+  "trident-forge is waiting for you". No red, no badge, no count, no sound by
+  default.
+- **Additive, like `drooping`.** It is not a state on the ladder. A sleeping or
+  `unknown` creature does not get up; only the status line changes.
+- **Only the project and the kind of wait leave the Mac.** Never the prompt
+  text or the command.
+
+Source: Claude Code hooks, as HTTP hooks posting to loopback.
+
+| Hook | Use |
+|---|---|
+| `Notification` matching `permission_prompt`, `idle_prompt`, `elicitation_dialog`, `agent_needs_input` | raise attention for that `session_id` and `cwd` |
+| `UserPromptSubmit`, `PostToolUse`, `SessionEnd` | clear it for that session |
+
+- It belongs in the telemetry backend, not the bridge, so the menu-bar app
+  gets it too and there is still one source of state: a loopback-only
+  `POST /attention` and an additive `attention[]` in the
+  `agentic-avatar.telemetry/1` payload. The bridge forwards it with the rest.
+- Entries expire on their own (proposed: two hours), because a missed clear
+  must not leave the creature asking forever.
+- **To verify:** that these hooks fire for sessions run from the Claude desktop
+  app (Dispatch) and from Cowork. Hooks do run in desktop Code sessions, but
+  whether a permission prompt handled by the app raises `Notification` is not
+  confirmed, and Cowork sessions may not load `~/.claude` hooks at all. If
+  they do not, those sessions need another source or are out of scope.
+
+### Energy: Thomas's actual usage
+
+Energy must match Claude's own meter, for both the 5-hour window and the
+weekly limit. Today it is an estimate: tokens summed from the logs against a
+budget of 45M that was calibrated by hand.
+
+| Source | Gives | Verdict |
+|---|---|---|
+| Claude Code status line input, `rate_limits.five_hour` and `.seven_day` (`used_percentage`, `resets_at`) | the real numbers | Documented. Only reaches a status line script in an interactive terminal session, on Pro and Max, after the first response. Thomas mostly works in the desktop app, so this alone would often be silent. |
+| `rate_limit_event` in `claude -p --output-format stream-json` | the same two windows as `utilization` and `resetsAt` | **Proposed primary.** Observed on this Mac on 2026-10-09 (5-hour 18%, weekly 9%). The bridge already runs this command for Ask. Not yet checked against the SDK documentation. |
+| API response headers | the same | Only visible to the process making the call. Not reachable. |
+| The endpoint behind `/usage` | the same | Undocumented and needs his OAuth token. Not used. |
+| `~/.claude` session logs | token counts, no limits | What the estimate uses today. |
+| Scraping claude.ai | | Ruled out. |
+
+Design:
+
+- Each Ask harvests a reading for free. Between Asks, a small probe (one
+  short Haiku call) refreshes it while work is happening, at most every 15
+  minutes, and not at all when nothing is moving. Each probe spends a sliver
+  of the budget it measures.
+- Energy becomes `100 − five_hour used`. The weekly window is a second
+  reading in `energy_detail`, shown on the usage detail view.
+- The token sum stays, as the estimate between readings. Each real reading
+  recalibrates the budget (`tokens in window ÷ utilization`), which replaces
+  the hand-set 45M.
+- The payload says which it is showing and how old the last real reading is.
+  With no real reading at all, energy is the estimate and labelled as one.
+- The creature sleeps when either window is spent. A spent weekly window is a
+  long sleep, and the status line says until when.
+- A status line script can be added later as a second feed for terminal
+  sessions. It costs nothing when it runs.
+
+### Work page: 48 hours and 7 days
+
+| Last meaningful signal | Shown as |
+|---|---|
+| within 6 hours | live (counts toward Health) |
+| within 48 hours | active |
+| 48 hours to 7 days | stale, dimmed |
+| older than 7 days | hidden |
+
+- "Meaningful" keeps its meaning: a human prompt or a completion, not tool
+  chatter.
+- **Health does not change.** It stays "how many projects are live in the last
+  6 hours, against a target of 3". Health asks whether several things are
+  moving today. The Work page answers what has been touched this week. If
+  Health used the 48-hour window it would sit near 100 and say nothing.
+- `drooping` stays tied to the 6-hour window.
+- The 7-day cut-off is already the scanner's lookback
+  (`AVATAR_LOOKBACK_DAYS`), so older projects are not in the payload at all.
+- Change needed: the backend adds a `tier` to each workstream
+  (`live`, `active`, `stale`), from a new `AVATAR_ACTIVE_WINDOW_HOURS`
+  (default 48), so no renderer works the tiers out for itself.
+
+### Cubase page
+
+Right after Home. Planning only.
+
+- **Top:** position (bars and beats, timecode as an alternate), tempo and time
+  signature.
+- **Middle:** return to start, stop, play, record, cycle.
+- **Below:** previous marker, next marker, add marker, click.
+- **Bottom:** selected track name with record-arm, mute and solo.
+- **Swipe down:** the patch cheat-sheet, loaded from the bridge or the SD card.
+
+| Route | How | When |
+|---|---|---|
+| Mackie Control over the bridge | the bridge opens a virtual MIDI port; the board sends presses over its websocket | Cubase on this Mac. Two-way with no Cubase script: transport state, track names, position, arm, mute, solo. |
+| BLE-MIDI from the board | the board pairs with any Mac as a Bluetooth MIDI device | Cubase on another machine. More firmware work; Bluetooth shares the radio with Wi-Fi. |
+| Cubase MIDI Remote script | a custom script in place of Mackie | Only for what Mackie lacks. |
+
+Mackie Control carries neither tempo nor marker names. Tempo can come from
+MIDI clock. Marker names would need a MIDI Remote script. Neither is verified
+against Cubase.
+
+Open: which machine runs Cubase, what the cheat-sheet holds, and whether the
+board's mic should mute while Cubase records.
+
+---
+
 ## Open questions
 
-1. What microphone does the Mac mini use today, if any?
-2. Wi-Fi bridge (a) or USB microphone (b2) for Phase 1?
-3. Is one token-protected LAN listener on the Mac acceptable, given the repo's
-   no-network posture?
-4. Spoken replies, or text on screen only?
-5. Which machine runs Cubase and Serato?
-6. Is Wispr Flow in use on another machine? It is not on this one.
+Answered in section 6: the route (Wi-Fi bridge), the LAN listener (approved),
+spoken replies (yes), the microphone (the board is the dedicated mic).
+
+Still open:
+
+1. Which machine runs Cubase and Serato?
+2. What does the Cubase patch cheat-sheet hold?
+3. Do Claude Code hooks fire for desktop-app and Cowork sessions?
+4. Should needs-attention have an optional sound?
 
 ## Sources
 
