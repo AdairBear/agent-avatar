@@ -172,7 +172,7 @@ class Session:
         self.decoder = Decoder(DEVICE_SAMPLE_RATE)
         self.segmenter = Segmenter(
             DEVICE_SAMPLE_RATE, self.cfg.silence_ms, self.cfg.min_speech_ms,
-            self.cfg.max_utterance_s, self.cfg.min_rms,
+            self.cfg.max_utterance_s, self.cfg.min_rms, noise_ratio=self.cfg.noise_ratio,
         )
         self.queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         self.busy = False

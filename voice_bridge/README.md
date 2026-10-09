@@ -113,6 +113,8 @@ All fields are in `voice_bridge/config.py` with their defaults. The ones worth k
 |---|---|---|
 | `default_mode` | `dictate` | `ask` sends every utterance to Claude |
 | `silence_ms` | `1000` | pause that ends an utterance |
+| `min_rms` | `120` | quietest level that can count as speech |
+| `noise_ratio` | `3.0` | speech must be this many times louder than the room |
 | `idle_close_s` | `45` | hang up after this long without speech |
 | `tts` | `true` | speak replies; `false` shows text only |
 | `claude_model` | `sonnet` | model alias passed to the CLI |
@@ -130,7 +132,7 @@ changes, the board cannot find the bridge. Give the Mac a DHCP reservation.
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-29 tests: Opus round trip, end-pointing, routing, auth on every endpoint, the
+33 tests: Opus round trip, end-pointing, routing, auth on every endpoint, the
 firmware offer, and
 the full protocol against a fake device with fake Whisper, paste and Claude.
 
@@ -142,6 +144,7 @@ the full protocol against a fake device with fake Whisper, paste and Claude.
   is no "Claude" model.
 - Stock firmware powers the board off after five idle minutes, even on USB
   power. Our build fixes that; on stock, press the power button to wake it.
-- End-pointing is a level threshold. A long thinking pause ends the utterance.
+- End-pointing is a level threshold above the measured room noise. A long
+  thinking pause ends the utterance.
 - Replies use the macOS `say` voice.
 - Each ask is a fresh Claude call with the last few turns pasted in as context.

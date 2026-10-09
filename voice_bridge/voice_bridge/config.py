@@ -50,7 +50,11 @@ class Config:
     silence_ms: int = 1000
     min_speech_ms: int = 300
     max_utterance_s: int = 90
-    min_rms: int = 350
+    # Speech must be louder than the measured noise floor times `noise_ratio`,
+    # and never quieter than `min_rms` (16-bit RMS). Each session's closing log
+    # line reports the levels it saw against the threshold it used.
+    min_rms: int = 120
+    noise_ratio: float = 3.0
     # Close the session after this long with no speech, so the mic is not
     # left open indefinitely in the firmware's continuous-listening mode.
     idle_close_s: int = 45

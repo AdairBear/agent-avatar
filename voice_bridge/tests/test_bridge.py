@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import random
 import shutil
 import struct
 import tempfile
@@ -37,6 +38,13 @@ def tone(ms: int, amplitude: int = 8000, rate: int = RATE) -> bytes:
 
 def silence(ms: int, rate: int = RATE) -> bytes:
     return b"\x00" * (rate * ms // 1000 * 2)
+
+
+def hiss(ms: int, level: int, rate: int = RATE) -> bytes:
+    """Steady noise at about `level` RMS."""
+    rng = random.Random(level)
+    n = rate * ms // 1000
+    return struct.pack(f"<{n}h", *(int(rng.gauss(0, level)) for _ in range(n)))
 
 
 def frames(pcm: bytes, size: int = FRAME * 2):
@@ -80,9 +88,37 @@ class SegmenterTest(unittest.TestCase):
         self.assertIsNotNone(seg.flush())
         self.assertIsNone(seg.flush())
 
+    def test_quiet_speech_in_a_quiet_room_is_heard(self):
+        # The levels the panel's mic actually produced: floor near 50, speech 250-800.
+        seg = Segmenter(silence_ms=600)
+        got = self.feed(seg, hiss(600, 50) + tone(1200, 450) + hiss(900, 50))
+        self.assertEqual(len(got), 1)
+
+    def test_steady_loud_noise_is_not_speech(self):
+        seg = Segmenter(silence_ms=600)
+        self.assertEqual(self.feed(seg, hiss(6000, 400)), [])
+        self.assertFalse(seg.in_speech)
+        # ... and speech over that noise still is.
+        got = self.feed(seg, tone(900, 4000) + hiss(900, 400))
+        self.assertEqual(len(got), 1)
+
+    def test_room_noise_does_not_trigger(self):
+        seg = Segmenter()
+        self.assertEqual(self.feed(seg, hiss(5000, 50)), [])
+        self.assertEqual(seg.loud_frames, 0)
+
+    def test_long_speech_with_short_gaps_stays_one_utterance(self):
+        seg = Segmenter(silence_ms=1000)
+        speech = b"".join(tone(540, 600) + hiss(120, 50) for _ in range(12))
+        got = self.feed(seg, hiss(600, 50) + speech + hiss(1200, 50))
+        self.assertEqual(len(got), 1)
+        self.assertGreaterEqual(len(got[0]), len(speech))
+
     def test_max_length_forces_a_cut(self):
         seg = Segmenter(max_utterance_s=1)
-        self.assertEqual(len(self.feed(seg, tone(2500))), 2)
+        # Speech-shaped: bursts with short dips, as a floor-tracking segmenter expects.
+        speech = b"".join(tone(540) + hiss(60, 50) for _ in range(4)) + tone(100)
+        self.assertEqual(len(self.feed(seg, speech)), 2)
 
 
 class RouteTest(unittest.TestCase):
