@@ -1,0 +1,16 @@
+diff --git a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc b/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc
+index ff17a56..0bac972 100644
+--- a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc
++++ b/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc
+@@ -351,7 +351,10 @@ public:
+     }
+ 
+     virtual bool GetBatteryLevel(int &level, bool &charging, bool &discharging) override {
+-        static bool last_discharging = false;
++        // Start from "discharging" so the first reading on USB power turns the
++        // idle power-off timer off; otherwise a board with no battery shuts
++        // down after five idle minutes while plugged in.
++        static bool last_discharging = true;
+         charging = pmic_->IsCharging();
+         discharging = pmic_->IsDischarging();
+         if (discharging != last_discharging)

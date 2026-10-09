@@ -4,8 +4,11 @@
 #   tools/flash_device.sh backup            read the whole 16 MB flash to ~/Backups and verify it
 #   tools/flash_device.sh flash FIRMWARE    write a xiaozhi merged-binary.bin plus our NVS settings
 #   tools/flash_device.sh restore BACKUP    put a backup back
+#   tools/flash_device.sh assets FILE       write a generated_assets.bin (fonts, wake-word model)
 #
-# The board must be in download mode: hold BOOT while plugging in USB, then release.
+# backup, flash and restore need download mode: hold BOOT while plugging in USB,
+# then release. assets first tries esptool's own reset, which may be enough once
+# xiaozhi is running.
 # PORT defaults to the Waveshare board on this Mac. The other usbmodem port is
 # the Dirtywave M8; never point this script at it.
 set -eu
@@ -15,6 +18,7 @@ BAUD="${BAUD:-921600}"
 FLASH_SIZE=0x1000000
 NVS_OFFSET=0x9000
 NVS_SIZE=0x4000
+ASSETS_OFFSET=0x800000
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 ESPTOOL="esptool --chip esp32s3 --port $PORT --baud $BAUD --before no-reset"
 
@@ -46,8 +50,13 @@ restore)
     backup="${2:?path to backup .bin}"
     $ESPTOOL --after hard-reset write-flash 0 "$backup"
     ;;
+assets)
+    assets="${2:?path to generated_assets.bin}"
+    esptool --chip esp32s3 --port "$PORT" --baud "$BAUD" --after hard-reset \
+        write-flash $ASSETS_OFFSET "$assets"
+    ;;
 *)
-    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
     ;;
 esac

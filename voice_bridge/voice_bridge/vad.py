@@ -46,6 +46,24 @@ class Segmenter:
         self._speech_ms = 0.0
         self._silence_run_ms = 0.0
         self.in_speech = False
+        # Running totals for the session summary in the log.
+        self.frames = 0
+        self.loud_frames = 0
+        self.peak_rms = 0.0
+        self._levels: list[float] = []
+
+    @property
+    def noise(self) -> float:
+        return self._noise
+
+    @property
+    def threshold(self) -> float:
+        """The level a frame must exceed to count as speech."""
+        return max(self.min_rms, self._noise * 3)
+
+    @property
+    def median_rms(self) -> float:
+        return sorted(self._levels)[len(self._levels) // 2] if self._levels else 0.0
 
     def _ms(self, pcm: bytes) -> float:
         return len(pcm) / 2 / self.sample_rate * 1000
@@ -54,7 +72,12 @@ class Segmenter:
         """Add one frame. Returns a finished utterance, or None."""
         level = rms(pcm)
         ms = self._ms(pcm)
-        loud = level > max(self.min_rms, self._noise * 3)
+        self.frames += 1
+        self.peak_rms = max(self.peak_rms, level)
+        if len(self._levels) < 20000:
+            self._levels.append(level)
+        loud = level > self.threshold
+        self.loud_frames += loud
 
         if not self.in_speech:
             if not loud:

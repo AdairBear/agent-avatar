@@ -11,8 +11,11 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import shutil
 import struct
+import tempfile
 import unittest
+from pathlib import Path
 
 from aiohttp import WSMsgType
 from aiohttp.test_utils import TestClient, TestServer
@@ -105,6 +108,17 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(asr.clean("hello (music)  world"), "hello world")
 
 
+def fake_app_image(test: unittest.TestCase, version: str, elf: bytes) -> Path:
+    """A file with a valid ESP-IDF image header and app description, and no code."""
+    desc = struct.pack("<I12x32s32s16s16s32s32s", 0xABCD5432, version.encode(), b"xiaozhi",
+                       b"12:00:00", b"Oct  9 2026", b"v6.1", elf)
+    folder = tempfile.mkdtemp()
+    test.addCleanup(shutil.rmtree, folder)
+    path = Path(folder) / "xiaozhi.bin"
+    path.write_bytes(b"\xe9" + bytes(23) + bytes(8) + desc + bytes(600))
+    return path
+
+
 class FakeAsr:
     def __init__(self, text: str):
         self.text = text
@@ -186,6 +200,45 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
                                              "token": "wstoken", "version": 1})
         self.assertEqual(body["firmware"]["version"], "0.0.0")
         self.assertNotIn("activation", body)
+
+    async def test_ota_offers_firmware_until_the_device_runs_it(self):
+        image = fake_app_image(self, version="2.5.0", elf=b"\x11" * 32)
+        await self.start("x", firmware_path=str(image))
+        check_in = lambda elf: self.client.post(
+            "/xiaozhi/ota/?k=otakey", json={"application": {"version": "2.5.0", "elf_sha256": elf}})
+
+        offer = (await (await check_in("ab" * 32)).json())["firmware"]
+        self.assertEqual(offer, {"version": "2.5.0", "force": 1,
+                                 "url": "http://10.0.0.5:8790/xiaozhi/firmware/?k=otakey"})
+        # Once the device reports this build, the forced offer must stop.
+        current = (await (await check_in("11" * 32)).json())["firmware"]
+        self.assertEqual(current, {"version": "0.0.0", "url": ""})
+        # A device that does not say what it runs is never upgraded.
+        r = await self.client.post("/xiaozhi/ota/?k=otakey", json={"board": {}})
+        self.assertEqual((await r.json())["firmware"]["url"], "")
+
+    async def test_ota_stops_offering_an_image_that_never_installs(self):
+        image = fake_app_image(self, version="2.5.0", elf=b"\x11" * 32)
+        await self.start("x", firmware_path=str(image))
+        urls = []
+        for _ in range(5):
+            r = await self.client.post("/xiaozhi/ota/?k=otakey", headers={"Device-Id": "aa:bb"},
+                                       json={"application": {"elf_sha256": "ab" * 32}})
+            urls.append(bool((await r.json())["firmware"]["url"]))
+        self.assertEqual(urls, [True, True, True, False, False])
+
+    async def test_firmware_download_needs_the_key(self):
+        image = fake_app_image(self, version="2.5.0", elf=b"\x11" * 32)
+        await self.start("x", firmware_path=str(image))
+        self.assertEqual((await self.client.get("/xiaozhi/firmware/?k=wrong")).status, 404)
+        r = await self.client.get("/xiaozhi/firmware/?k=otakey")
+        self.assertEqual(r.status, 200)
+        self.assertEqual(int(r.headers["Content-Length"]), image.stat().st_size)
+        self.assertEqual(await r.read(), image.read_bytes())
+
+    async def test_no_firmware_configured_means_no_download(self):
+        await self.start("x")
+        self.assertEqual((await self.client.get("/xiaozhi/firmware/?k=otakey")).status, 404)
 
     async def test_websocket_needs_the_token(self):
         await self.start("x")

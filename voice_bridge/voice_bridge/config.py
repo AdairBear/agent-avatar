@@ -31,6 +31,10 @@ class Config:
     ws_token: str = ""
     # Device-Id (MAC) allowlist. Empty list = any device holding the secrets.
     allowed_device_ids: list[str] = field(default_factory=list)
+    # An app image (xiaozhi.bin, not the merged image) to install over the air.
+    # A device is offered it at check-in only while it runs a different build.
+    # Empty = never offer an upgrade.
+    firmware_path: str = ""
 
     # --- speech to text (whisper.cpp server, loopback only) -----------------
     whisper_server_bin: str = "/opt/homebrew/bin/whisper-server"
@@ -71,10 +75,17 @@ class Config:
     tts_rate_wpm: int = 190
 
     log_transcripts: bool = False
+    # Diagnostic: keep the last session's microphone audio as a WAV in the
+    # config directory. Off by default; it is a recording of the room.
+    keep_session_audio: bool = False
 
     @property
     def ota_url(self) -> str:
         return f"http://{self.public_host}:{self.port}/xiaozhi/ota/?k={self.ota_key}"
+
+    @property
+    def firmware_url(self) -> str:
+        return f"http://{self.public_host}:{self.port}/xiaozhi/firmware/?k={self.ota_key}"
 
     @property
     def ws_url(self) -> str:
