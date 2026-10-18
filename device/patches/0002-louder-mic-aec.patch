@@ -1,0 +1,143 @@
+From 62d9dacd85d02039675c08e57d92b563944a7b85 Mon Sep 17 00:00:00 2001
+From: Thomas Adair <34932535+AdairBear@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 21:52:50 -0700
+Subject: [PATCH 2/2] feat(amoled-2.16): louder microphone and working
+ device-side AEC
+
+The on-board mic was too quiet to end-point reliably: a session measured a
+median level of 52 and a peak of 785 on a 16-bit scale.
+
+- Raise the ES7210 preamp from the 30 dB default to its 37.5 dB maximum.
+- Add AFE_OUTPUT_GAIN_PERCENT and USE_AFE_AGC, and set them for this board:
+  2x digital gain on the AFE output, then WebRTC AGC (9 dB, -3 dBFS target).
+- Add the board to USE_DEVICE_AEC's dependency list. Its config.json asked
+  for device-side AEC, but Kconfig dropped the setting because the board
+  was not listed, so AEC only ever ran during wake-word detection.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ main/Kconfig.projbuild                         | 18 +++++++++++++++++-
+ main/audio/engines/afe_audio_engine.cc         | 17 +++++++++++++++++
+ .../esp32-s3-touch-amoled-2.16/config.h        |  3 +++
+ .../esp32-s3-touch-amoled-2.16/config.json     |  4 +++-
+ .../esp32-s3-touch-amoled-2.16.cc              |  3 ++-
+ 5 files changed, 42 insertions(+), 3 deletions(-)
+
+diff --git a/main/Kconfig.projbuild b/main/Kconfig.projbuild
+index 8d5ae70..b1c4eb2 100644
+--- a/main/Kconfig.projbuild
++++ b/main/Kconfig.projbuild
+@@ -960,7 +960,7 @@ config USE_DEVICE_AEC
+     default n
+         depends on USE_AUDIO_PROCESSOR && (BOARD_TYPE_ESP32_S3_BOX_3 || BOARD_TYPE_ESP32_S3_BOX || BOARD_TYPE_ESP32_S3_BOX_LITE \
+         || BOARD_TYPE_LICHUANG_DEV_S3 || BOARD_TYPE_RYMCU_BIGSMART || BOARD_TYPE_ESP32_S3_KORVO_2_V3 || BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_1_75|| BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_1_75C || BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_LCD_1_83\
+-        || BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_2_06 || BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_LCD_4B || BOARD_TYPE_WAVESHARE_ESP32_P4_WIFI6_TOUCH_LCD_4B || BOARD_TYPE_WAVESHARE_ESP32_P4_WIFI6_TOUCH_LCD_4_3 || BOARD_TYPE_WAVESHARE_ESP32_P4_WIFI6_TOUCH_LCD_5 \
++        || BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_2_06 || BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_2_16 || BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_LCD_4B || BOARD_TYPE_WAVESHARE_ESP32_P4_WIFI6_TOUCH_LCD_4B || BOARD_TYPE_WAVESHARE_ESP32_P4_WIFI6_TOUCH_LCD_4_3 || BOARD_TYPE_WAVESHARE_ESP32_P4_WIFI6_TOUCH_LCD_5 \
+         || BOARD_TYPE_WAVESHARE_ESP32_P4_WIFI6_TOUCH_LCD_7B \
+         || BOARD_TYPE_WAVESHARE_ESP32_P4_WIFI6_TOUCH_LCD_3_4C || BOARD_TYPE_WAVESHARE_ESP32_P4_WIFI6_TOUCH_LCD_4C || BOARD_TYPE_ESP32_S3_LCD_EV_BOARD_2 || BOARD_TYPE_YUNLIAO_S3 \
+         || BOARD_TYPE_WAVESHARE_ESP32_P4_WIFI6_TOUCH_LCD_7 || BOARD_TYPE_WAVESHARE_ESP32_P4_WIFI6_TOUCH_LCD_8 || BOARD_TYPE_WAVESHARE_ESP32_P4_WIFI6_TOUCH_LCD_10_1 \
+@@ -969,6 +969,22 @@ config USE_DEVICE_AEC
+     help
+         To work properly, device-side AEC requires a clean output reference path from the speaker signal and physical acoustic isolation between the microphone and speaker.
+ 
++config AFE_OUTPUT_GAIN_PERCENT
++    int "AFE output gain (percent)"
++    default 100
++    range 10 1000
++    help
++        Fixed digital gain applied to the AFE's output, in percent: 100 leaves
++        the level alone, 200 doubles it. For boards whose microphone is quiet
++        even at the codec's maximum analog gain.
++
++config USE_AFE_AGC
++    bool "Enable AFE Automatic Gain Control"
++    default n
++    help
++        Run WebRTC AGC on the AFE's output (9 dB compression gain, -3 dBFS
++        target), after the fixed output gain.
++
+ config USE_SERVER_AEC
+     bool "Enable Server-Side AEC (Unstable)"
+     default n
+diff --git a/main/audio/engines/afe_audio_engine.cc b/main/audio/engines/afe_audio_engine.cc
+index 3823d10..ac5d526 100644
+--- a/main/audio/engines/afe_audio_engine.cc
++++ b/main/audio/engines/afe_audio_engine.cc
+@@ -175,7 +175,17 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
+             afe_config->wakenet_model_name_2 = wakenet_models[1];
+         }
+     }
++    // For boards with a quiet microphone: a fixed digital gain on the AFE
++    // output, then AGC to hold speech near the target level without clipping.
++    afe_config->afe_linear_gain = CONFIG_AFE_OUTPUT_GAIN_PERCENT / 100.0f;
++#if CONFIG_USE_AFE_AGC
++    afe_config->agc_init = true;
++    afe_config->agc_mode = AFE_AGC_MODE_WEBRTC;
++    afe_config->agc_compression_gain_db = 9;
++    afe_config->agc_target_level_dbfs = 3;
++#else
+     afe_config->agc_init = false;
++#endif
+     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
+ 
+     ESP_LOGI(TAG, "Before AFE create: free=%u min=%u largest=%u",
+@@ -242,6 +252,13 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
+                                : (wake_detector_ == WakeDetector::kMultiNet ? "MultiNet" : "none");
+     ESP_LOGI(TAG, "Initialized FD AFE, detector: %s, NS: off, feed: %d, fetch: %d", detector,
+              afe_iface_->get_feed_chunksize(afe_data_), afe_iface_->get_fetch_chunksize(afe_data_));
++#if CONFIG_USE_AFE_AGC
++    const char* agc = "on";
++#else
++    const char* agc = "off";
++#endif
++    ESP_LOGI(TAG, "Mic gain: codec %.1f dB, AFE output x%.2f, AGC: %s", codec_->input_gain(),
++             CONFIG_AFE_OUTPUT_GAIN_PERCENT / 100.0f, agc);
+     ESP_LOGI(TAG, "After AFE create: free=%u min=%u largest=%u",
+              heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+              heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+diff --git a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/config.h b/main/boards/waveshare/esp32-s3-touch-amoled-2.16/config.h
+index 11fd682..b45663e 100644
+--- a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/config.h
++++ b/main/boards/waveshare/esp32-s3-touch-amoled-2.16/config.h
+@@ -7,6 +7,9 @@
+ #define AUDIO_OUTPUT_SAMPLE_RATE 24000
+ 
+ #define AUDIO_INPUT_REFERENCE    true
++// The on-board mic is quiet at the codec's 30 dB default; 37.5 dB is the
++// ES7210 preamp's maximum.
++#define AUDIO_INPUT_GAIN         37.5f
+ 
+ #define AUDIO_I2S_GPIO_MCLK GPIO_NUM_42
+ #define AUDIO_I2S_GPIO_WS GPIO_NUM_45
+diff --git a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/config.json b/main/boards/waveshare/esp32-s3-touch-amoled-2.16/config.json
+index b4b4292..bad5a76 100644
+--- a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/config.json
++++ b/main/boards/waveshare/esp32-s3-touch-amoled-2.16/config.json
+@@ -8,7 +8,9 @@
+             "sdkconfig_append": [
+                 "CONFIG_USE_WECHAT_MESSAGE_STYLE=n",
+                 "CONFIG_BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_2_16=y",
+-                "CONFIG_USE_DEVICE_AEC=y"
++                "CONFIG_USE_DEVICE_AEC=y",
++                "CONFIG_AFE_OUTPUT_GAIN_PERCENT=200",
++                "CONFIG_USE_AFE_AGC=y"
+             ]
+         }
+     ]
+diff --git a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc b/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc
+index 0bac972..99fd9cc 100644
+--- a/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc
++++ b/main/boards/waveshare/esp32-s3-touch-amoled-2.16/esp32-s3-touch-amoled-2.16.cc
+@@ -338,7 +338,8 @@ public:
+             AUDIO_CODEC_PA_PIN, 
+             AUDIO_CODEC_ES8311_ADDR, 
+             AUDIO_CODEC_ES7210_ADDR, 
+-            AUDIO_INPUT_REFERENCE);
++            AUDIO_INPUT_REFERENCE,
++            AUDIO_INPUT_GAIN);
+         return &audio_codec;
+     }
+ 
+-- 
+2.54.0 (Apple Git-157)
+

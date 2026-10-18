@@ -1,0 +1,6 @@
+{
+    "idfInstalled": {
+        "~/esp/esp-idf-v6.1": {"version": "6.1", "path": "~/esp/esp-idf", "features": ["core"], "targets": ["esp32s3"]},
+        "/Volumes/Archive/_Imports/Mini-offload-2026-10-17/home/esp/esp-idf-v6.1": {"version": "6.1", "path": "/Volumes/Archive/_Imports/Mini-offload-2026-10-17/home/esp/esp-idf", "features": ["core"], "targets": ["esp32s3"]}
+    }
+}

@@ -1,0 +1,15 @@
+#!/bin/bash
+# Panel-build wrapper while ESP-IDF lives on the Archive drive (see device/FIRMWARE.md).
+# `git describe --dirty` against the Archive copy re-hashes all of ESP-IDF and its
+# submodules on every call (stale index, can't be refreshed read-only) and stalls CMake.
+# For repos on /Volumes/Archive, drop --dirty; everything else passes straight through.
+if [[ " $* " == *" describe "* && " $* " == *"--dirty"* ]]; then
+  repo="$PWD"; prev=""
+  for a in "$@"; do [[ "$prev" == "-C" ]] && repo="$a"; prev="$a"; done
+  real="$(cd "$repo" 2>/dev/null && pwd -P)"
+  if [[ "$real" == /Volumes/Archive/* ]]; then
+    out=(); for a in "$@"; do [[ "$a" == "--dirty" ]] || out+=("$a"); done
+    exec /usr/bin/git "${out[@]}"
+  fi
+fi
+exec /usr/bin/git "$@"
