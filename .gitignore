@@ -17,3 +17,13 @@ __pycache__/
 
 # Stray per-directory hook state
 src/**/.claude/
+
+# Secrets: never commit these (see SECURITY.md)
+secrets.h
+!secrets.example.h
+.env
+.env.*
+*.pem
+*.key
+voice_bridge/config.json
+config.local.*

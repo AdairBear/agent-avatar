@@ -1,4 +1,4 @@
-# Agentic Avatar
+# Agent Avatar
 
 A living companion that makes agentic work legible: **two gauges, one creature.**
 
@@ -15,6 +15,36 @@ reads session logs already on this Mac and serves them on loopback only.
 > telemetry reads your actual logs. The avatar is a three.js capybara built from
 > primitives, posed live by the four signals, until a rigged `avatar.glb` is
 > dropped in. Both halves are designed to be swapped without touching the other.
+
+---
+
+> **🚧 Work in progress toward v1.** Built in public. See [STATUS.md](STATUS.md)
+> for where things stand, [CHANGELOG.md](CHANGELOG.md) for what changed, and the
+> roadmap below. MIT licensed.
+
+## Roadmap to v1
+
+v1 turns the ESP32 voice panel into the creature: Home shows the capybara with
+three calm arcs and a status line, voice runs as an overlay, and "Agent, …"
+commands go to a local router before anything reaches Claude. Full plan:
+[docs/plans/v1-esp32-avatar.md](docs/plans/v1-esp32-avatar.md).
+
+- [ ] **M0** Measure: router latency and memory on the host, ESP-IDF v6.1 build check
+- [ ] **M1** Telemetry as a background agent, with real 5-hour and weekly usage
+- [ ] **M2** Bridge: panel snapshot (`GET /panel/state`, `POST /panel/settings`)
+- [ ] **M3** Bridge: local voice-command router with an eval set
+- [ ] **M4** Firmware: Home and Device pages, drawn capybara, gauge arcs
+- [ ] **M5** "Needs you" attention signal (cuttable)
+- [ ] **M6** Soak test and fixes, then tag v1.0
+
+Not in v1: Cubase, Work and Audio pages, sprite art.
+
+## Build the firmware
+
+See [device/FIRMWARE.md](device/FIRMWARE.md). In short: install ESP-IDF v6.1
+in `~/esp/esp-idf`, `brew install cmake ninja dfu-util`, then run
+`device/build.sh`. Secrets go in a gitignored `device/secrets.h` (copy
+`device/secrets.example.h`); see [SECURITY.md](SECURITY.md).
 
 ---
 
