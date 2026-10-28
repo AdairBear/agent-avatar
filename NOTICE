@@ -1,0 +1,5 @@
+Agent Avatar
+Copyright (c) 2026 Thomas Adair. MIT licensed, see LICENSE.
+
+`device/patches/*.patch` modify xiaozhi-esp32 (https://github.com/78/xiaozhi-esp32),
+which is MIT licensed by its authors. The patches are offered under the same terms.
